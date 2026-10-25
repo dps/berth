@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ type AuthSetupParams struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	CheckOnly    bool   `json:"check_only,omitempty"` // validate the host, change nothing
+	Owner        string `json:"owner,omitempty"`      // email for the @owners group (dev versions)
 }
 
 // checkSignInHost makes sure host is <label>.<domain> (covered by the
@@ -149,6 +151,15 @@ func (d *Daemon) hAuthSetup(ctx context.Context, params json.RawMessage, out io.
 		return nil, err
 	}
 	ac.Provider, ac.ClientID, ac.Host = "google", p.ClientID, host
+	if owner := strings.ToLower(strings.TrimSpace(p.Owner)); owner != "" {
+		if err := state.ValidateAllowEntry(owner); err != nil || strings.HasPrefix(owner, "@") {
+			return nil, fmt.Errorf("--owner takes an email address")
+		}
+		if !slices.Contains(ac.Groups[devOwnersGroup], owner) {
+			ac.Groups[devOwnersGroup] = append(ac.Groups[devOwnersGroup], owner)
+		}
+		fmt.Fprintf(out, "-----> @%s: %s (dev versions are open to this group)\n", devOwnersGroup, strings.Join(ac.Groups[devOwnersGroup], " "))
+	}
 	if err := d.Store.SaveAuthConfig(ac); err != nil {
 		return nil, err
 	}

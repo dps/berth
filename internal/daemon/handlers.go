@@ -54,6 +54,11 @@ func (d *Daemon) handlers() map[string]handler {
 		"auth.revoke":     d.hAuthRevoke,
 		"access.set":      d.hAccessSet,
 		"app.setrepo":     d.hSetRepo,
+		"dev.deploy":      d.hDevDeploy,
+		"dev.reset":       d.hDevReset,
+		"dev.set":         d.hDevSet,
+		"dev.token":       d.hDevToken,
+		"dev.dbcopy":      d.hDevDBCopy,
 		"storage.mount":   d.hStorageMount,
 		"storage.unmount": d.hStorageUnmount,
 		"svc.create":      d.hSvcCreate,
@@ -165,6 +170,12 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 	}
 	if err := state.ValidateAppName(p.Name); err != nil {
 		return nil, err
+	}
+	if base, ok := strings.CutSuffix(p.Name, "-dev"); ok && d.Store.AppExists(base) {
+		return nil, fmt.Errorf("%s is the address of %s's dev version (berth dev:push)", p.Name, base)
+	}
+	if d.Store.AppExists(state.DevName(p.Name)) {
+		return nil, fmt.Errorf("app %s already exists, which would clash with %s's dev version; pick another name", state.DevName(p.Name), p.Name)
 	}
 	if ac, _ := d.Store.AuthConfig(); ac != nil && ac.Host != "" && ac.Host == p.Name+"."+d.cfg().Domain {
 		return nil, fmt.Errorf("app name %q is taken by Berth's sign-in host %s", p.Name, ac.Host)
@@ -364,9 +375,23 @@ func (d *Daemon) hDestroy(ctx context.Context, params json.RawMessage, out io.Wr
 	if err != nil {
 		return nil, err
 	}
+	if dev, err := d.Store.App(state.DevName(app.Name)); err == nil && dev.DevOf == app.Name {
+		fmt.Fprintf(out, "-----> Destroying the dev version %s\n", dev.Name)
+		d.destroyApp(ctx, dev, false, out)
+	}
+	d.destroyApp(ctx, app, p.KeepData, out)
+	return map[string]string{"destroyed": app.Name}, nil
+}
+
+// destroyApp removes an app's containers, images, webhook, links, domains
+// and files; a dev version also loses its dev database and Redis.
+func (d *Daemon) destroyApp(ctx context.Context, app *state.App, keepData bool, out io.Writer) {
 	unlock := d.Deployer.Lock(app.Name)
 	defer unlock()
 	cfg := d.cfg()
+	if app.DevOf != "" {
+		d.dropDevServices(ctx, app, out)
+	}
 	rs, _ := d.Store.Releases(app.Name)
 	var images []string
 	for _, r := range rs {
@@ -414,7 +439,7 @@ func (d *Daemon) hDestroy(ctx context.Context, params json.RawMessage, out io.Wr
 		d.removeDomainDNS(ctx, cfg, app.Domains, out)
 	}
 	os.RemoveAll(d.Store.AppDir(app.Name))
-	if !p.KeepData {
+	if !keepData {
 		os.RemoveAll(d.Store.Path("data", "apps", app.Name))
 	} else if len(app.Mounts) > 0 {
 		fmt.Fprintf(out, "-----> Kept data in %s\n", d.Store.Path("data", "apps", app.Name))
@@ -427,7 +452,6 @@ func (d *Daemon) hDestroy(ctx context.Context, params json.RawMessage, out io.Wr
 		d.ApplyTunnel(ctx, true)
 	}
 	d.event(state.Event{Kind: "destroy", App: app.Name, Message: "app destroyed"})
-	return map[string]string{"destroyed": app.Name}, nil
 }
 
 func (d *Daemon) hDeploy(ctx context.Context, params json.RawMessage, out io.Writer) (any, error) {
@@ -653,6 +677,11 @@ func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
 		}
 		if first, rest, ok := strings.Cut(host, "."); ok && rest == cfg.Domain && d.Store.AppExists(first) {
 			return "the hostname of app " + first
+		}
+		if first, rest, ok := strings.Cut(host, "."); ok && rest == cfg.Domain {
+			if base, ok := strings.CutSuffix(first, "-dev"); ok && d.Store.AppExists(base) {
+				return "the dev address of app " + base
+			}
 		}
 	}
 	if strings.HasSuffix(host, ".local") || (cfg.TailnetDomain != "" && strings.HasSuffix(host, "."+cfg.TailnetDomain)) {

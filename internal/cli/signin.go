@@ -94,7 +94,7 @@ func accessRule(level string, allow []string) string {
 }
 
 func cmdAuthSetup() *cobra.Command {
-	var clientID, secret, host string
+	var clientID, secret, host, owner string
 	var noBrowser bool
 	c := &cobra.Command{
 		Use:   "auth:setup google",
@@ -154,7 +154,12 @@ the Google Cloud console (once; every app shares the client):
 					secret = ask("")
 				}
 			}
-			if err := call("auth.setup", daemon.AuthSetupParams{Provider: "google", Host: host, ClientID: clientID, ClientSecret: secret}, nil); err != nil {
+			if owner == "" {
+				if ac, err := store().AuthConfig(); err == nil && len(ac.Groups["owners"]) == 0 {
+					owner = ask("Your Google email (dev versions are open to the @owners group): ")
+				}
+			}
+			if err := call("auth.setup", daemon.AuthSetupParams{Provider: "google", Host: host, ClientID: clientID, ClientSecret: secret, Owner: owner}, nil); err != nil {
 				return err
 			}
 			if !jsonOut {
@@ -167,6 +172,7 @@ the Google Cloud console (once; every app shares the client):
 	c.Flags().StringVar(&secret, "client-secret", "", "OAuth client secret (prompted if omitted)")
 	c.Flags().BoolVar(&noBrowser, "no-browser", false, "don't open the Google Cloud console")
 	c.Flags().StringVar(&host, "host", "", "sign-in hostname (default auth.<domain>)")
+	c.Flags().StringVar(&owner, "owner", "", "your Google email; joins the @owners group that can open dev versions")
 	return c
 }
 

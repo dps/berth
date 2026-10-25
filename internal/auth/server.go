@@ -36,7 +36,19 @@ type Site struct {
 	App     string
 	BaseURL string // https://host[:port], where /_berth/callback lives
 	Access  *state.Access
+	// Tokens (dev versions only) maps HashToken(token) to the pretend
+	// user's email, or "" for no identity.
+	Tokens map[string]string
 }
+
+// TokenPrefix marks dev tokens: Authorization: Bearer berth_dev_….
+const TokenPrefix = "berth_dev_"
+
+// NewToken returns a fresh dev token.
+func NewToken() string { return TokenPrefix + token() }
+
+// HashToken is how dev tokens are stored and looked up.
+func HashToken(t string) string { return hashOf(t) }
 
 type login struct {
 	host, ret string
@@ -178,12 +190,25 @@ func (s *Server) check(w http.ResponseWriter, r *http.Request, host string, site
 		http.Error(w, "bad request path", http.StatusBadRequest)
 		return
 	}
+	_, authHost, groups := s.snapshot()
+	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "+TokenPrefix); ok && site.Tokens != nil {
+		as, valid := site.Tokens[HashToken(TokenPrefix+tok)]
+		if !valid {
+			jsonError(w, http.StatusUnauthorized, map[string]string{"error": "unknown or revoked dev token"})
+			return
+		}
+		if as != "" {
+			local, _, _ := strings.Cut(as, "@")
+			s.identityHeaders(w.Header(), Identity{Provider: "dev", Subject: as, Email: as, Name: local}, authHost, host)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	sess := s.session(r, host)
 	rule := state.Rule{Level: state.LevelPublic}
 	if site.Access != nil {
 		rule = site.Access.For(p)
 	}
-	_, authHost, groups := s.snapshot()
 	pass := func() {
 		if sess != nil {
 			s.identityHeaders(w.Header(), sess.User, authHost, host)

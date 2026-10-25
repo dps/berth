@@ -232,6 +232,39 @@ The hand-off works for custom domains in other zones and for LAN and Tailscale h
 
 Basic auth (`berth auth:set`) remains for sites where a password is simpler; it runs before the access check.
 
+## Dev versions
+
+Every app has a dev version at `https://<app>-dev.<domain>` for trying changes before they are committed, built for coding agents: one command deploys the working tree as it is on disk and returns a result the agent can act on. Production stays git-driven; nothing reaches it except a push to its branch.
+
+**The address exists for every app; the container doesn't.** Until the first push, `<app>-dev.<domain>` shows a "no dev version yet" page. The dash (not `dev.<app>.<domain>`) keeps it one level under the domain, inside the wildcard DNS record, tunnel rule and Cloudflare's free certificate. `berth create` refuses `x-dev` when `x` exists and the reverse; `berth dev:off <app>` removes an app's dev version and its address.
+
+**A dev version is an app.** The first push creates `<app>-dev` (marked `dev_of: <app>` in `app.json`), so every app command works on it: `berth logs chirp-dev -f`, `berth config:set chirp-dev …`, `berth run chirp-dev npm run migrate`, `berth status chirp-dev`, `berth restart chirp-dev`. It builds from the parent's git mirror (`refs/berth/dev`) with the same detection, cache and health checks, keeps 3 releases, has its own slots, env and logs, and is never polled or webhooked.
+
+**Pushing the working tree.** `berth dev:push [app]` snapshots the repo exactly as it is on disk without touching anything the developer sees:
+
+```
+cp .git/index $tmp; GIT_INDEX_FILE=$tmp git add -A   # tracked + untracked; .gitignore respected, so .env stays out
+git write-tree; git commit-tree -p HEAD -m "berth dev snapshot: 1a510cb + 3 files changed, 40 insertions(+)"
+git push <mirror> <commit>:refs/berth/dev            # only new objects travel
+```
+
+then asks berthd to deploy that commit to the dev version. The app is the argument, or found from the repo's `berth` remote, or by matching its `origin` against apps' repos. On the Mac the push goes to the mirror's path and the deploy is an RPC; from another machine it goes over the `berth` SSH remote (`berth git:remote`) and the deploy runs as `ssh <mac> berth dev:deploy <app> --ref <sha>`. It is synchronous: build output streams, and on a failed health check the last 50 log lines follow. Exit codes are 0 live, 1 build failed, 2 the app failed to start; `--json` prints `{app, release, status, stage, url, base, dirty, changes, build_secs, error}`. A clean tree deploys `HEAD` itself. A snapshot over 100 MB gets a warning (usually an unignored `node_modules`).
+
+**Data is never production's.**
+
+- Postgres: for each `pg:<db>` the parent links, the dev version gets a database `<db>_dev` in the same server (no second 140 MB container) with its own login and its own owner group `<db>_dev_rw`. `CONNECT` is revoked from `PUBLIC` on both databases, so the dev login can't connect to production's and vice versa. It starts empty; `berth dev:db:copy <app>` replaces it with a copy of production's (`pg_dump --no-owner | psql` with `role=<db>_dev_rw`, so the dev app owns every object and its migrations can alter them).
+- Redis: ACLs can't fence numbered databases, so the dev version gets its own small `redis:<name>-dev` container (128 MB), only if the parent links Redis.
+- Storage mounts get their own folders under `data/apps/<app>-dev/`.
+- Env: copied from the parent when the dev version is created, minus link URLs (which point at the dev services instead), with `BERTH_KEEP_RELEASES=3`. API keys come along so the dev version works; `berth config:set <app>-dev` overrides. Later parent changes don't flow down; `berth dev:reset <app>` deletes the dev version, its data and its links, and the next push recreates it from the parent.
+
+**Access.** Dev versions run unreviewed code, so with sign-in set up they default to `allow @owners` (the group `auth:setup --owner` creates); without sign-in they are LAN and Tailscale only. Agents can't click through Google, so `berth dev:token <app> [--as test@example.com]` mints a bearer token (shown once, stored hashed on the parent app, valid only on that app's dev hosts, `--revoke` deletes them all). A request with `Authorization: Bearer berth_dev_…` passes the access check; with `--as`, berthd also sends identity headers for that pretend user (`X-Berth-User-Id: dev:test@example.com`), so agents can test signed-in flows with curl or Playwright. `dev:` IDs never collide with real `google:` ones. Dev responses carry `X-Robots-Tag: noindex`.
+
+**Idle dev versions sleep.** The supervisor stops a dev version after 12 hours (`config.json` `dev_idle_hours`) with no deploy and no request (the access log's modification time); its address then says it is asleep. The next `dev:push` (or `berth start <app>-dev`) wakes it.
+
+**For agents.** `berth dev:agents <app>` prints a block for the repo's `AGENTS.md`/`CLAUDE.md`: how to deploy, the URL, how to authenticate (`$BERTH_DEV_TOKEN`, never committed), logs, one-off commands, and the rule that production only changes through a commit and push.
+
+**Not in v1:** promoting dev to production (commit and push instead; production history stays in git), several dev versions per app (per-branch previews), and waking on a request.
+
 ## Storage
 
 Postgres is the built-in service; everything else is a bind-mounted folder. Both keep data on the Mac's own disk under `~/.berth`, so Time Machine (or any backup the user already has) covers it with no extra setup — via nightly dumps for Postgres, directly for app folders.
@@ -362,7 +395,8 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth domains:add\|remove\|list <app> <host>` | extra hostnames via tunnel ingress | `domains:*` |
 | `berth auth:set\|unset <app> user:pass` | basic auth in Caddy | http-auth plugin |
 | `berth access <app> [path] <public\|signed-in\|allow who...\|off> [--remove]` | Google sign-in policy for an app or path | — |
-| `berth auth:setup google` / `auth:status` / `auth:group <name> [who...]` / `auth:sessions` / `auth:revoke <email>` | sign-in setup, groups and sessions | — |
+| `berth dev:push [app] [--json]` / `dev:token <app> [--as email] [--revoke]` / `dev:db:copy <app>` / `dev:reset <app>` / `dev:agents <app>` / `dev:off\|on <app>` | dev versions at `<app>-dev.<domain>` (any app command also works on `<app>-dev`) | — |
+| `berth auth:setup google [--host h] [--owner email]` / `auth:status` / `auth:group <name> [who...]` / `auth:sessions` / `auth:revoke <email>` | sign-in setup, groups and sessions | — |
 | `berth storage:mount\|unmount\|list <app> <path>` | persistent folders | `storage:*` |
 | `berth pg:create\|link\|unlink\|psql\|backup\|restore\|expose\|upgrade\|destroy\|list` | Postgres service | dokku-postgres |
 | `berth redis:*` | Redis service (same verbs; `redis:cli` instead of `pg:psql`) | dokku-redis |
@@ -429,7 +463,7 @@ berth/
 
 **Acceptance tests** (checked, not aspirational): the three-command install on a fresh macOS 26 account completes in < 5 min with no `sudo` beyond the two consented commands; push-to-live p50 < 45 s for a Node app with a warm cache; zero failed requests across 20 consecutive deploys under load; power-cycle recovery < 2 min with all apps and Postgres healthy (in `--unattended` mode, or measured from the FileVault unlock otherwise); `berth restore` on a second Mac reproduces every app and database; `go test ./...` runs on Linux with the fake runtime and covers state, deploy ordering, HMAC, detection and Caddy config generation.
 
-Results so far: zero failed requests across 20 deploys and a restart through the real Cloudflare tunnel at 20 requests/s (1,325 requests, p50 28 ms), and locally across 20 deploys at 100 requests/s (5,071 requests); push-to-live through a real GitHub webhook about 8 s for the hello-world FastAPI app, and 12 s with `git push berth` over SSH; crash-loop give-up after 10 crashes with the notification delivered through ntfy.sh; push-to-live about 3 s for a small Node app with a warm cache; `berth restore` after a full purge reproduced every app, database, Redis key, volume and config var in 15 s on the same Mac; `go test -race ./...` passes and every package compiles for Linux. The install, power-cycle and second-Mac tests have not been run. Google sign-in worked end to end on the first real install: `auth:setup google`, then sign-in on `auth.cronbon.com` and a one-redirect hand-off to Chirp (`berth access chirp public`), whose posts now carry the Google identity.
+Results so far: zero failed requests across 20 deploys and a restart through the real Cloudflare tunnel at 20 requests/s (1,325 requests, p50 28 ms), and locally across 20 deploys at 100 requests/s (5,071 requests); push-to-live through a real GitHub webhook about 8 s for the hello-world FastAPI app, and 12 s with `git push berth` over SSH; crash-loop give-up after 10 crashes with the notification delivered through ntfy.sh; push-to-live about 3 s for a small Node app with a warm cache; `berth restore` after a full purge reproduced every app, database, Redis key, volume and config var in 15 s on the same Mac; `go test -race ./...` passes and every package compiles for Linux. The install, power-cycle and second-Mac tests have not been run. Google sign-in worked end to end on the first real install: `auth:setup google`, then sign-in on `auth.cronbon.com` and a one-redirect hand-off to Chirp (`berth access chirp public`), whose posts now carry the Google identity. Dev versions on the same install: an uncommitted change in a Chirp checkout was live at `chirp-dev.cronbon.com` 5.6 s after `berth dev:push` (2.4 s build), with a token user posting to its own `chirpdb_dev`; the dev login is refused by production's database and vice versa; broken builds and crashing starts exit 1 and 2 with the previous dev release still serving; the same push over SSH from a "remote" checkout returned the JSON result.
 
 **Guidance for the agent**: read Apple's `container` docs (`github.com/apple/container/docs`) for the exact flags before writing `runtime/`; prefer one shell-out with `--format json` over parsing text; make every write to `~/.berth` atomic (write temp, rename); log every external command at debug level with its duration; keep each CLI command under 150 lines; when in doubt, copy the Dokku behaviour and name.
 

@@ -147,6 +147,7 @@ func (d *Daemon) supervise(ctx context.Context) {
 		d.reexec()
 		return
 	}
+	d.sleepIdleDev(ctx)
 	if d.tunnelRetry.Load() {
 		if _, err := d.ApplyTunnel(ctx, true); err != nil {
 			slog.Warn("tunnel config retry", "err", err)

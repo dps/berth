@@ -221,6 +221,10 @@ func short(sha string) string {
 // checkout fetches and exports the commit into a fresh build directory.
 func (d *Deployer) checkout(ctx context.Context, app *state.App, ref string, n int, out io.Writer) (sha, subject, dir string, err error) {
 	repo := d.Store.Path("apps", app.Name, "repo.git")
+	if app.DevOf != "" {
+		// A dev version builds snapshots pushed to its parent's mirror.
+		repo = d.Store.Path("apps", app.DevOf, "repo.git")
+	}
 	url := ""
 	if app.Repo != "" {
 		url = app.CloneURL()

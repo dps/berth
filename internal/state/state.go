@@ -91,6 +91,7 @@ type Config struct {
 	KeepReleases    int    `json:"keep_releases"`
 	PGBackupHour    int    `json:"pg_backup_hour"`
 	PGBackupKeep    int    `json:"pg_backup_keep"`
+	DevIdleHours    int    `json:"dev_idle_hours"` // stop a dev version after this long without a deploy or request
 	Launchd         bool   `json:"launchd"`
 	AutoHealNetwork *bool  `json:"auto_heal_network,omitempty"` // restart the container system if containers lose outbound network (default on)
 	ContainerTested string `json:"container_tested"`
@@ -117,6 +118,7 @@ func DefaultConfig() *Config {
 		KeepReleases:    5,
 		PGBackupHour:    3,
 		PGBackupKeep:    14,
+		DevIdleHours:    12,
 		ContainerTested: "1.6.1",
 	}
 }
@@ -163,6 +165,17 @@ type Webhook struct {
 	Secret string `json:"secret"`
 }
 
+// DevToken lets an agent past the dev version's access check. As, if set,
+// is the pretend user it is signed in as.
+type DevToken struct {
+	Hash    string    `json:"hash"` // sha256 hex
+	As      string    `json:"as,omitempty"`
+	Created time.Time `json:"created"`
+}
+
+// DevName is the dev version of app.
+func DevName(app string) string { return app + "-dev" }
+
 type BasicAuth struct {
 	User string `json:"user"`
 	Hash string `json:"hash"` // bcrypt
@@ -183,6 +196,9 @@ type App struct {
 	Links      []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
 	Auth       *BasicAuth `json:"auth,omitempty"`
 	Access     *Access    `json:"access,omitempty"` // sign-in policy; nil = none
+	DevOf      string     `json:"dev_of,omitempty"` // set on <app>-dev: the app it is the dev version of
+	DevOff     bool       `json:"dev_off,omitempty"`
+	DevTokens  []DevToken `json:"dev_tokens,omitempty"` // bearer tokens for the dev version (hashes)
 	DeployKey  bool       `json:"deploy_key,omitempty"`
 	Stopped    bool       `json:"stopped,omitempty"`
 	PollETag   string     `json:"poll_etag,omitempty"`
@@ -391,6 +407,7 @@ type Link struct {
 	Role     string `json:"role"`
 	Password string `json:"password"`
 	EnvVar   string `json:"env_var"`
+	DB       string `json:"db,omitempty"` // Postgres database, if not the service's own (dev versions)
 }
 
 func ServiceContainer(kind, name string) string { return kind + "-" + name }

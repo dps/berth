@@ -84,6 +84,17 @@ func roleName(app string) string { return strings.ReplaceAll(app, "-", "_") }
 
 func dbName(name string) string { return strings.ReplaceAll(name, "-", "_") }
 
+// DevDB is the database a dev version gets in the parent's Postgres.
+func DevDB(service string) string { return dbName(service) + "_dev" }
+
+// linkDB is the database a link connects to.
+func linkDB(sv *state.Service, l state.Link) string {
+	if l.DB != "" {
+		return l.DB
+	}
+	return dbName(sv.Name)
+}
+
 func (m *Manager) envFile(sv *state.Service) string {
 	return m.Store.Path("services", sv.Kind, sv.Name, "env")
 }
@@ -308,7 +319,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, sv *state.Service, cs []run
 func URL(sv *state.Service, l state.Link, gateway string) string {
 	switch sv.Kind {
 	case "pg":
-		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", l.Role, l.Password, gateway, sv.Port, dbName(sv.Name))
+		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", l.Role, l.Password, gateway, sv.Port, linkDB(sv, l))
 	case "redis":
 		if l.Role == "" {
 			return fmt.Sprintf("redis://:%s@%s:%d", sv.Password, gateway, sv.Port)
@@ -336,7 +347,7 @@ func quoteLit(s string) string   { return `'` + strings.ReplaceAll(s, `'`, `''`)
 // member of <db>_rw, which owns the public schema, and sessions SET ROLE to
 // it so objects created by any linked app are usable by all of them.
 func grantSQL(sv *state.Service, l state.Link) (cluster string, inDB string) {
-	db := dbName(sv.Name)
+	db := linkDB(sv, l)
 	group := db + "_rw"
 	cluster = fmt.Sprintf(`DO $$ BEGIN
 IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = %[1]s) THEN CREATE ROLE %[2]s NOLOGIN; END IF;
@@ -406,11 +417,104 @@ func (m *Manager) ownsValue(sv *state.Service, v string) bool {
 }
 
 func (m *Manager) applyGrants(ctx context.Context, sv *state.Service, l state.Link) error {
+	if l.DB != "" {
+		// A dev database: (re)create it if it's missing, e.g. after
+		// pg:upgrade or restore, which carry only the service's own.
+		if err := m.ensureDevDB(ctx, sv, l.DB); err != nil {
+			return err
+		}
+	}
 	cluster, inDB := grantSQL(sv, l)
 	if err := m.psql(ctx, sv, "postgres", cluster); err != nil {
 		return err
 	}
-	return m.psql(ctx, sv, dbName(sv.Name), inDB)
+	return m.psql(ctx, sv, linkDB(sv, l), inDB)
+}
+
+// ensureDevDB creates db next to the service's own database. CONNECT is
+// revoked from PUBLIC on both, so only each database's group (whose
+// members are its linked apps) can connect: the dev login can't reach
+// production's data, nor production's login the dev data.
+func (m *Manager) ensureDevDB(ctx context.Context, sv *state.Service, db string) error {
+	prod := dbName(sv.Name)
+	return m.psql(ctx, sv, "postgres", fmt.Sprintf(`SELECT 'CREATE DATABASE %[1]s' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = %[2]s)
+\gexec
+REVOKE CONNECT ON DATABASE %[1]s FROM PUBLIC;
+REVOKE CONNECT ON DATABASE %[3]s FROM PUBLIC;
+DO $$ BEGIN
+IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = %[4]s) THEN CREATE ROLE %[5]s NOLOGIN; END IF;
+END $$;
+GRANT CONNECT ON DATABASE %[3]s TO %[5]s;
+`, quoteIdent(db), quoteLit(db), quoteIdent(prod), quoteLit(prod+"_rw"), quoteIdent(prod+"_rw")))
+}
+
+// LinkDev links app (a dev version) to its own database in pg:name.
+func (m *Manager) LinkDev(ctx context.Context, name, app, envVar string) (string, error) {
+	sv, err := m.Store.Service("pg", name)
+	if err != nil {
+		return "", err
+	}
+	cfg, err := m.Store.Config()
+	if err != nil {
+		return "", err
+	}
+	l, ok := sv.Links[app]
+	if !ok {
+		l = state.Link{Role: roleName(app), Password: Password()}
+	}
+	l.EnvVar, l.DB = envVar, DevDB(name)
+	if err := m.applyGrants(ctx, sv, l); err != nil {
+		return "", err
+	}
+	sv.Links[app] = l
+	if err := m.Store.SaveService(sv); err != nil {
+		return "", err
+	}
+	return URL(sv, l, cfg.Gateway), nil
+}
+
+// DropDev removes app's dev database and logins from pg:name.
+func (m *Manager) DropDev(ctx context.Context, name, app string) error {
+	sv, err := m.Store.Service("pg", name)
+	if err != nil {
+		return err
+	}
+	db := DevDB(name)
+	err = m.psql(ctx, sv, "postgres", fmt.Sprintf(`DROP DATABASE IF EXISTS %[1]s WITH (FORCE);
+DROP ROLE IF EXISTS %[2]s;
+DROP ROLE IF EXISTS %[3]s;`, quoteIdent(db), quoteIdent(roleName(app)), quoteIdent(db+"_rw")))
+	delete(sv.Links, app)
+	if serr := m.Store.SaveService(sv); err == nil {
+		err = serr
+	}
+	return err
+}
+
+// CopyToDev replaces app's dev database with a copy of the service's own.
+// The restore runs as the dev group, so the dev app owns every object.
+func (m *Manager) CopyToDev(ctx context.Context, name, app string) error {
+	sv, err := m.Store.Service("pg", name)
+	if err != nil {
+		return err
+	}
+	l, ok := sv.Links[app]
+	if !ok || l.DB == "" {
+		return fmt.Errorf("%s has no dev database in pg:%s yet (berth dev:push first)", app, name)
+	}
+	if err := m.psql(ctx, sv, "postgres", fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE);", quoteIdent(l.DB))); err != nil {
+		return err
+	}
+	if err := m.applyGrants(ctx, sv, l); err != nil {
+		return err
+	}
+	// Names are validated identifiers (lowercase letters, digits, _).
+	script := fmt.Sprintf(`set -eo pipefail
+pg_dump -U postgres --no-owner --no-acl -d %s | PGOPTIONS='-c role=%s' psql -U postgres -v ON_ERROR_STOP=1 -q -d %s`, dbName(name), l.DB+"_rw", l.DB)
+	var out bytes.Buffer
+	if err := m.RT.Exec(ctx, state.ServiceContainer("pg", sv.Name), []string{"bash", "-c", script}, false, false, nil, &out, &out); err != nil {
+		return fmt.Errorf("copy %s → %s: %v %s", dbName(name), l.DB, err, strings.TrimSpace(out.String()))
+	}
+	return nil
 }
 
 // Unlink revokes the app's login and returns the env var to remove.

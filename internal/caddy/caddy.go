@@ -32,6 +32,12 @@ type Route struct {
 	// Cache-Control private so Cloudflare never caches them for others.
 	SignIn  bool
 	Private bool
+	// Placeholder, if set, is all the route serves (a dev address before its
+	// first push). DownBody replaces the "not running" text; NoIndex asks
+	// search engines to stay away.
+	Placeholder string
+	DownBody    string
+	NoIndex     bool
 }
 
 type Options struct {
@@ -184,6 +190,17 @@ func handlers(r Route, o Options) []any {
 		// Identity headers only ever come from berthd, never the client.
 		hs = append(hs, obj{"handler": "headers", "request": obj{"delete": o.IDHeaders}})
 	}
+	if r.NoIndex {
+		hs = append(hs, obj{"handler": "headers", "response": obj{"set": obj{"X-Robots-Tag": []string{"noindex, nofollow"}}}})
+	}
+	if r.Placeholder != "" {
+		return append(hs, obj{
+			"handler":     "static_response",
+			"status_code": 404,
+			"body":        r.Placeholder,
+			"headers":     obj{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		})
+	}
 	if r.AuthUser != "" {
 		hs = append(hs, obj{
 			"handler": "authentication",
@@ -242,10 +259,14 @@ func forwardAuth(o Options) obj {
 func appHandlers(r Route, o Options) []any {
 	var hs []any
 	if r.Service == "" {
+		body := r.DownBody
+		if body == "" {
+			body = r.App + " is not running (berth status " + r.App + ")\n"
+		}
 		return append(hs, obj{
 			"handler":     "static_response",
 			"status_code": 503,
-			"body":        r.App + " is not running (berth status " + r.App + ")\n",
+			"body":        body,
 			"headers":     obj{"Retry-After": []string{"30"}},
 		})
 	}

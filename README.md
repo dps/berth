@@ -37,6 +37,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [Persistent storage](#persistent-storage)
 - [Hostnames, custom domains and access control](#hostnames-custom-domains-and-access-control)
 - [Sign in with Google](#sign-in-with-google)
+- [Dev versions for agents](#dev-versions-for-agents)
 - [One-off commands and shells](#one-off-commands-and-shells)
 - [Running a Mac in a closet](#running-a-mac-in-a-closet)
 - [Backups and moving to a new Mac](#backups-and-moving-to-a-new-mac)
@@ -514,6 +515,88 @@ lists them, `berth auth:revoke <email>` signs someone out everywhere, and
 `berth auth:status` shows the setup, groups and app policies.
 [Chirp](https://github.com/dps/berth_chirp_node) is a complete example.
 
+## Dev versions for agents
+
+Every app has a dev version at `https://<app>-dev.<your domain>`: a place to
+try changes before they're committed, built so coding agents can test their
+own work. From the app's repo:
+
+```bash
+berth dev:push
+```
+
+That deploys the working tree exactly as it is on disk: uncommitted edits and
+new files too (`.gitignore` is respected, so `.env` and `node_modules` stay
+out). Your branch, index and stash aren't touched. A small change is live in
+about 5 seconds. Production never changes this way; it still deploys only
+from pushes to its branch.
+
+For agents, `dev:push` is synchronous and scriptable:
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | live |
+| 1 | the build failed (its output is above) |
+| 2 | the app built but failed to start (its last log lines are above) |
+
+`--json` prints the result (`status`, `stage`, `url`, `release`, the base
+commit and a summary of uncommitted changes) on stdout, with progress on
+stderr. A failed push leaves the previous dev release serving.
+
+`berth dev:agents myapp` prints a block to paste into the repo's `AGENTS.md`
+or `CLAUDE.md` that tells an agent how to deploy, read logs and authenticate.
+
+### Who can reach it
+
+Dev versions run unreviewed code, so they aren't public. With
+[sign-in](#sign-in-with-google) set up, they're open to the `@owners` group
+(`berth auth:group owners you@gmail.com`); without it, they're LAN and
+Tailscale only. Agents can't click through Google, so give them a token:
+
+```bash
+berth dev:token myapp --as test@example.com     # prints export BERTH_DEV_TOKEN=…
+curl -H "Authorization: Bearer $BERTH_DEV_TOKEN" https://myapp-dev.example.com/api/me
+berth dev:token myapp --revoke                  # revoke them all
+```
+
+With `--as`, requests are signed in as that pretend user
+(`X-Berth-User-Id: dev:test@example.com`), so an agent can test the signed-in
+parts of an app. Tokens only work on the dev version.
+
+### Its data is its own
+
+A dev version never sees production's data:
+
+- **Postgres:** it gets its own database (`<db>_dev`) in the same Postgres,
+  with a login that can't connect to production's database. It starts empty.
+  `berth dev:db:copy myapp` replaces it with a copy of production's.
+- **Redis:** it gets its own small Redis.
+- **Storage mounts:** its own folders.
+- **Config:** copied from the app when the dev version is first created,
+  minus the database URLs. API keys come along. Change it with
+  `berth config:set myapp-dev KEY=value`.
+
+### It's an app
+
+The dev version is the app `myapp-dev`, so every app command works on it:
+`berth logs myapp-dev -f`, `berth run myapp-dev npm run migrate`,
+`berth status`, `berth restart myapp-dev`. It keeps 3 releases.
+
+To save memory, it sleeps after 12 hours with no pushes and no requests, and
+the next `dev:push` wakes it. Change the timeout with `dev_idle_hours` in
+`~/.berth/config.json`.
+
+`berth dev:reset myapp` deletes the dev version and its data, and the next
+push starts fresh from the app's current config. `berth dev:off myapp`
+removes the dev address altogether.
+
+### From another machine
+
+From a laptop with the Berth CLI, add the SSH remote once
+(`berth git:remote myapp`, run on the Mac or with `--host`), then `berth
+dev:push` in the repo pushes the snapshot over SSH and runs the deploy on the
+Mac. The exit codes and `--json` output are the same.
+
 ## One-off commands and shells
 
 ```bash
@@ -651,6 +734,8 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | **Hostnames and access** | |
 | `berth domains:add \| remove \| list <app> [host] [--force]` | custom domains |
 | `berth auth:set <app> user:pass` · `berth auth:unset <app>` | basic auth |
+| `berth dev:push [app] [--json]` | deploy the working tree to `<app>-dev` |
+| `berth dev:token <app> [--as email] [--revoke]` · `dev:db:copy` · `dev:reset` · `dev:agents` · `dev:off` · `dev:on` | dev versions |
 | `berth access <app> [path] [public \| signed-in \| allow who... \| off] [--remove]` | Google sign-in policy |
 | `berth auth:setup google [--host h]` · `auth:status` · `auth:group <name> [who...]` · `auth:sessions` · `auth:revoke <email>` | sign-in setup, groups, sessions |
 | **Storage and services** | |

@@ -169,16 +169,44 @@ func (d *Daemon) Apply(ctx context.Context) error {
 	}
 	var routes []caddy.Route
 	sites := map[string]auth.Site{}
+	byName := map[string]*state.App{}
 	for _, a := range apps {
-		r := caddy.Route{App: a.Name, AccessLog: d.Store.Path("apps", a.Name, "logs", "access.log")}
-		if !a.Private && !cfg.NoTunnel && cfg.Domain != "" {
-			r.PublicHosts = append([]string{a.Name + "." + cfg.Domain}, a.Domains...)
+		byName[a.Name] = a
+	}
+	hosts := func(name string, private bool, domains []string) (public, lan []string) {
+		if !private && !cfg.NoTunnel && cfg.Domain != "" {
+			public = append([]string{name + "." + cfg.Domain}, domains...)
 		}
 		if cfg.Hostname != "" {
-			r.LANHosts = []string{a.Name + "." + cfg.Hostname + ".local"}
+			lan = []string{name + "." + cfg.Hostname + ".local"}
 		}
 		if cfg.Tailscale && cfg.TailnetDomain != "" {
-			r.LANHosts = append(r.LANHosts, a.Name+"."+cfg.TailnetDomain)
+			lan = append(lan, name+"."+cfg.TailnetDomain)
+		}
+		return
+	}
+	for _, a := range apps {
+		// Every app's dev address exists before its first dev:push.
+		if dev := state.DevName(a.Name); a.DevOf == "" && !a.DevOff && byName[dev] == nil && state.ValidateAppName(dev) == nil {
+			r := caddy.Route{App: dev, NoIndex: true,
+				Placeholder: fmt.Sprintf("%s has no dev version yet.\nFrom %s's repo, run: berth dev:push\n", a.Name, a.Name)}
+			r.PublicHosts, r.LANHosts = hosts(dev, a.Private, nil)
+			routes = append(routes, r)
+		}
+	}
+	for _, a := range apps {
+		r := caddy.Route{App: a.Name, AccessLog: d.Store.Path("apps", a.Name, "logs", "access.log")}
+		r.PublicHosts, r.LANHosts = hosts(a.Name, a.Private, a.Domains)
+		var tokens map[string]string
+		if a.DevOf != "" {
+			r.NoIndex = true
+			r.DownBody = fmt.Sprintf("%s is asleep or stopped. Wake it with `berth dev:push` from %s's repo, or `berth start %s`.\n", a.Name, a.DevOf, a.Name)
+			tokens = map[string]string{}
+			if p := byName[a.DevOf]; p != nil {
+				for _, t := range p.DevTokens {
+					tokens[t.Hash] = t.As
+				}
+			}
 		}
 		// The route names the app's SRV service; which release it reaches is
 		// decided per lookup by berthd (see dns.go), so deploys, restarts
@@ -192,14 +220,14 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if a.Access != nil {
 			r.SignIn, r.Private = true, !a.Access.AllPublic()
 			for _, h := range r.PublicHosts {
-				sites[h] = auth.Site{App: a.Name, BaseURL: "https://" + h, Access: a.Access}
+				sites[h] = auth.Site{App: a.Name, BaseURL: "https://" + h, Access: a.Access, Tokens: tokens}
 			}
 			for _, h := range r.LANHosts {
 				base := "https://" + h
 				if strings.HasSuffix(h, ".local") {
 					base += portSuffix(cfg.CaddyHTTPS, "443")
 				}
-				sites[h] = auth.Site{App: a.Name, BaseURL: base, Access: a.Access}
+				sites[h] = auth.Site{App: a.Name, BaseURL: base, Access: a.Access, Tokens: tokens}
 			}
 		}
 		routes = append(routes, r)

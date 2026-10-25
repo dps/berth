@@ -63,9 +63,16 @@ func printJSON(v any) {
 type exitError struct {
 	msg  string
 	hint string
+	code int // process exit code; 0 means 1
 }
 
 func (e *exitError) Error() string { return e.msg }
+
+// silentExit ends the command with a code after it has printed its own
+// output (dev:push --json prints a result even when the deploy failed).
+type silentExit struct{ code int }
+
+func (e *silentExit) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 func hintErr(err error, hint string) error {
 	if err == nil {
@@ -103,6 +110,8 @@ func NewRoot() *cobra.Command {
 		cmdAuthSet(), cmdAuthUnset(), cmdAccess(),
 		cmdStorageMount(), cmdStorageUnmount(), cmdStorageList(),
 		cmdRun(), cmdExec(), cmdDockerfile(), cmdGitRemote(), cmdSetKey(), cmdSetRepo())
+	root.AddGroup(&cobra.Group{ID: "dev", Title: "Dev versions (<app>-dev.<domain>; app commands also work on <app>-dev):"})
+	add("dev", cmdDevPush(), cmdDevToken(), cmdDevDBCopy(), cmdDevReset(), cmdDevAgents(), cmdDevOnOff(true), cmdDevOnOff(false), cmdDevDeploy())
 	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in:"})
 	add("signin", cmdAuthSetup(), cmdAuthStatus(), cmdAuthGroup(), cmdAuthSessions(), cmdAuthRevoke())
 	add("services", serviceCommands("pg")...)
@@ -116,6 +125,10 @@ func NewRoot() *cobra.Command {
 func Execute() int {
 	root := NewRoot()
 	if err := root.Execute(); err != nil {
+		var silent *silentExit
+		if errors.As(err, &silent) {
+			return silent.code
+		}
 		if jsonOut {
 			b, _ := json.Marshal(map[string]string{"error": err.Error()})
 			fmt.Fprintln(os.Stdout, string(b))
@@ -129,6 +142,9 @@ func Execute() int {
 		case errors.Is(err, rpc.ErrDaemonDown), errors.Is(err, state.ErrNotInitialized):
 		case strings.Contains(err.Error(), "deploy") || strings.Contains(err.Error(), "health"):
 			fmt.Fprintln(os.Stderr, " !     see `berth logs <app> --build` and `berth logs <app>`")
+		}
+		if ee != nil && ee.code != 0 {
+			return ee.code
 		}
 		return 1
 	}
