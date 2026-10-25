@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,8 +125,8 @@ func TestWebhookDeploysOnceAndDedupes(t *testing.T) {
 		t.Fatal("no current release")
 	}
 	// Unknown app and oversized bodies are rejected.
-	if rec := push(t, h, "nope", "x", "d4", ev); rec.Code != 404 {
-		t.Fatalf("unknown app: %d", rec.Code)
+	if rec := push(t, h, "nope", "x", "d4", ev); rec.Code != 401 {
+		t.Fatalf("unknown app should look like a bad signature: %d", rec.Code)
 	}
 	big := httptest.NewRequest("POST", "/github/web", bytes.NewReader(make([]byte, maxHookBody+10)))
 	rr := httptest.NewRecorder()
@@ -309,5 +310,34 @@ func TestNetworkLossIsHealed(t *testing.T) {
 	}
 	if len(rt.CallLog("system stop")) != 1 {
 		t.Fatal("healed with auto_heal_network off")
+	}
+}
+
+// Junk requests from one IP are throttled without touching the app's budget
+// for real, signed deliveries.
+func TestWebhookFailuresDontStarveRealDeliveries(t *testing.T) {
+	d, _, repo := newTestDaemon(t)
+	params, _ := json.Marshal(CreateParams{Name: "web", Repo: repo, NoDeploy: true})
+	d.hCreate(d.ctx, params, &bytes.Buffer{})
+	app, _ := d.Store.App("web")
+	h := d.webhookHandler()
+	ev := map[string]any{"ref": "refs/heads/other"}
+	for i := 0; i < 50; i++ {
+		push(t, h, "web", "wrong", fmt.Sprintf("junk-%d", i), ev)
+	}
+	if rec := push(t, h, "web", "wrong", "junk-x", ev); rec.Code != 429 {
+		t.Fatalf("attacker IP not throttled: %d", rec.Code)
+	}
+	// GitHub comes from another address.
+	body, _ := json.Marshal(ev)
+	req := httptest.NewRequest("POST", "/github/web", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "real-1")
+	req.Header.Set("X-Hub-Signature-256", github.Sign(app.Webhook.Secret, body))
+	req.Header.Set("Cf-Connecting-Ip", "140.82.115.1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("real delivery blocked: %d %s", rec.Code, rec.Body)
 	}
 }

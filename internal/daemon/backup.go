@@ -170,13 +170,15 @@ func extractArchive(archive, root string) error {
 			target = filepath.Join(root, ".config.restored.json")
 		}
 		switch hdr.Typeflag {
+		// Modes from the archive are ignored: everything under ~/.berth is
+		// private to the user, whatever the archive says.
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return err
 			}
 		case tar.TypeReg:
 			os.MkdirAll(filepath.Dir(target), 0o700)
-			w, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode)&0o777)
+			w, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
 				return err
 			}

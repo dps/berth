@@ -148,7 +148,7 @@ func (s *Store) Config() (*Config, error) {
 	return c, nil
 }
 
-func (s *Store) SaveConfig(c *Config) error { return writeJSON(s.Path("config.json"), c, 0o644) }
+func (s *Store) SaveConfig(c *Config) error { return writeJSON(s.Path("config.json"), c, 0o600) }
 
 // Mount is a persistent folder bind-mounted into every release.
 type Mount struct {
@@ -233,6 +233,7 @@ func (s *Store) App(name string) (*App, error) {
 		}
 		return nil, err
 	}
+	a.Name = name // the directory is authoritative, not the file's contents
 	return a, nil
 }
 

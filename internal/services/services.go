@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -165,7 +166,9 @@ func (m *Manager) run(ctx context.Context, sv *state.Service, cfg *state.Config)
 		env["PGDATA"] = k.DataDir + "/pgdata" // the volume root holds lost+found
 	case "redis":
 		env["REDIS_PASSWORD"] = sv.Password
-		args = []string{"sh", "-c", `exec redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes --dir /data`}
+		// Users live in an ACL file on the volume: "default" (Berth's own
+		// admin login) plus one user per linked app, so unlink can revoke.
+		args = []string{"sh", "-c", redisEntrypoint}
 	}
 	var b strings.Builder
 	keys := make([]string, 0, len(env))
@@ -200,6 +203,49 @@ func (m *Manager) run(ctx context.Context, sv *state.Service, cfg *state.Config)
 		opts.Args = args[1:]
 	}
 	return m.RT.Run(ctx, opts)
+}
+
+const redisEntrypoint = `[ -f /data/users.acl ] || printf 'user default on >%s ~* &* +@all\n' "$REDIS_PASSWORD" > /data/users.acl
+exec redis-server --aclfile /data/users.acl --appendonly yes --dir /data`
+
+// redisCLI runs redis-cli as Berth's admin user with commands on stdin, so
+// app passwords never appear in a command line.
+func (m *Manager) redisCLI(ctx context.Context, sv *state.Service, commands string) error {
+	var out bytes.Buffer
+	err := m.RT.Exec(ctx, state.ServiceContainer("redis", sv.Name),
+		[]string{"sh", "-c", `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning`}, true, false, strings.NewReader(commands), &out, nil)
+	if err == nil && strings.Contains(out.String(), "ERR") {
+		err = errors.New(strings.TrimSpace(out.String()))
+	}
+	if err != nil {
+		return fmt.Errorf("redis-cli: %v", err)
+	}
+	return nil
+}
+
+// ensureRedisACL recreates a Redis container started before per-app users
+// existed (it ran with --requirepass and no ACL file). Data persists in the
+// volume; Redis is down for about a second.
+func (m *Manager) ensureRedisACL(ctx context.Context, sv *state.Service) error {
+	name := state.ServiceContainer("redis", sv.Name)
+	if m.RT.Exec(ctx, name, []string{"test", "-f", "/data/users.acl"}, false, false, nil, io.Discard, nil) == nil {
+		return nil
+	}
+	cfg, err := m.Store.Config()
+	if err != nil {
+		return err
+	}
+	if err := m.run(ctx, sv, cfg); err != nil {
+		return err
+	}
+	return m.WaitReady(ctx, sv, 60*time.Second)
+}
+
+func (m *Manager) applyRedisUser(ctx context.Context, sv *state.Service, l state.Link) error {
+	if l.Role == "" {
+		return nil // a link made before per-app users: uses the default login
+	}
+	return m.redisCLI(ctx, sv, fmt.Sprintf("ACL SETUSER %s reset on >%s ~* &* +@all\nACL SAVE\n", l.Role, l.Password))
 }
 
 // WaitReady polls until the service accepts TCP connections inside its
@@ -264,15 +310,19 @@ func URL(sv *state.Service, l state.Link, gateway string) string {
 	case "pg":
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", l.Role, l.Password, gateway, sv.Port, dbName(sv.Name))
 	case "redis":
-		return fmt.Sprintf("redis://:%s@%s:%d", sv.Password, gateway, sv.Port)
+		if l.Role == "" {
+			return fmt.Sprintf("redis://:%s@%s:%d", sv.Password, gateway, sv.Port)
+		}
+		return fmt.Sprintf("redis://%s:%s@%s:%d", l.Role, l.Password, gateway, sv.Port)
 	}
 	return ""
 }
 
 func (m *Manager) psql(ctx context.Context, sv *state.Service, db, sql string) error {
 	var out bytes.Buffer
+	// SQL (which can contain role passwords) goes over stdin, not argv.
 	err := m.RT.Exec(ctx, state.ServiceContainer("pg", sv.Name),
-		[]string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", db, "-q", "-c", sql}, false, false, nil, &out, nil)
+		[]string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", db, "-q", "-f", "-"}, true, false, strings.NewReader(sql), &out, nil)
 	if err != nil {
 		return fmt.Errorf("psql: %v %s", err, strings.TrimSpace(out.String()))
 	}
@@ -312,6 +362,11 @@ func (m *Manager) Link(ctx context.Context, kind, name, app, envVar string, appE
 	if err != nil {
 		return "", "", err
 	}
+	if envVar != "" {
+		if err := state.ValidateEnvKey(envVar); err != nil {
+			return "", "", err
+		}
+	}
 	if envVar == "" {
 		envVar = Kinds[kind].EnvVar
 		// Another service already owns DATABASE_URL: name this one.
@@ -320,15 +375,22 @@ func (m *Manager) Link(ctx context.Context, kind, name, app, envVar string, appE
 		}
 	}
 	l, ok := sv.Links[app]
-	if !ok {
+	if !ok || l.Role == "" {
+		// New link, or a Redis link from before per-app users: give the app
+		// its own login.
 		l = state.Link{Role: roleName(app), Password: Password()}
-		if kind == "redis" {
-			l.Role, l.Password = "", ""
-		}
 	}
 	l.EnvVar = envVar
-	if kind == "pg" {
+	switch kind {
+	case "pg":
 		if err := m.applyGrants(ctx, sv, l); err != nil {
+			return "", "", err
+		}
+	case "redis":
+		if err := m.ensureRedisACL(ctx, sv); err != nil {
+			return "", "", err
+		}
+		if err := m.applyRedisUser(ctx, sv, l); err != nil {
 			return "", "", err
 		}
 	}
@@ -361,10 +423,17 @@ func (m *Manager) Unlink(ctx context.Context, kind, name, app string) (string, e
 	if !ok {
 		return "", fmt.Errorf("%s is not linked to %s:%s", app, kind, name)
 	}
-	if kind == "pg" {
+	switch {
+	case kind == "pg":
 		if err := m.psql(ctx, sv, "postgres", fmt.Sprintf("ALTER ROLE %s NOLOGIN;", quoteIdent(l.Role))); err != nil {
 			return "", err
 		}
+	case kind == "redis" && l.Role != "":
+		if err := m.redisCLI(ctx, sv, fmt.Sprintf("ACL DELUSER %s\nACL SAVE\n", l.Role)); err != nil {
+			return "", err
+		}
+	case kind == "redis":
+		return "", fmt.Errorf("%s's link predates per-app Redis users, so it can't be revoked on its own; run `berth redis:link %s %s` first, then unlink", app, name, app)
 	}
 	delete(sv.Links, app)
 	return l.EnvVar, m.Store.SaveService(sv)
@@ -620,11 +689,15 @@ func (m *Manager) rollbackUpgrade(ctx context.Context, sv *state.Service, image,
 // RelinkAll refreshes every Postgres role (after a restore onto a fresh
 // volume, roles are missing).
 func (m *Manager) RelinkAll(ctx context.Context, sv *state.Service) error {
-	if sv.Kind != "pg" {
-		return nil
-	}
 	for _, l := range sv.Links {
-		if err := m.applyGrants(ctx, sv, l); err != nil {
+		var err error
+		switch sv.Kind {
+		case "pg":
+			err = m.applyGrants(ctx, sv, l)
+		case "redis":
+			err = m.applyRedisUser(ctx, sv, l)
+		}
+		if err != nil {
 			return err
 		}
 	}

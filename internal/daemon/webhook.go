@@ -15,7 +15,8 @@ import (
 
 const (
 	maxHookBody    = 1 << 20
-	hookRateLimit  = 30 // requests per app per minute
+	hookRateLimit  = 30 // authenticated deliveries per app per minute
+	hookFailLimit  = 10 // failed signatures per source IP per minute
 	keepDeliveries = 50
 )
 
@@ -28,31 +29,43 @@ func (d *Daemon) webhookHandler() http.Handler {
 	return mux
 }
 
-func (d *Daemon) allowHook(app string) bool {
+// recent counts events for key in the last minute; with add it records
+// one more. Keys are "app:<name>" (authenticated deliveries) and
+// "fail:<ip>" (bad signatures).
+func (d *Daemon) recent(key string, add bool) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := time.Now()
-	hits := d.hookHits[app][:0]
-	for _, t := range d.hookHits[app] {
+	hits := d.hookHits[key][:0]
+	for _, t := range d.hookHits[key] {
 		if now.Sub(t) < time.Minute {
 			hits = append(hits, t)
 		}
 	}
-	if len(hits) >= hookRateLimit {
-		d.hookHits[app] = hits
-		return false
+	if add {
+		hits = append(hits, now)
 	}
-	d.hookHits[app] = append(hits, now)
-	return true
+	if len(hits) == 0 {
+		delete(d.hookHits, key)
+	} else {
+		d.hookHits[key] = hits
+	}
+	return len(hits)
+}
+
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("Cf-Connecting-Ip"); ip != "" {
+		return ip
+	}
+	host, _, _ := strings.Cut(r.RemoteAddr, ":")
+	return host
 }
 
 func (d *Daemon) handleGitHub(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("app")
-	if state.ValidateAppName(name) != nil || !d.Store.AppExists(name) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if !d.allowHook(name) {
+	ip := clientIP(r)
+	// Senders of bad signatures are limited per IP, before any work, so
+	// they can't use up an app's budget for real deliveries.
+	if d.recent("fail:"+ip, false) >= hookFailLimit {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
 		return
 	}
@@ -65,14 +78,22 @@ func (d *Daemon) handleGitHub(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	app, err := d.Store.App(name)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	// Unknown apps and bad signatures get the same answer, so the endpoint
+	// doesn't reveal which app names exist.
+	name := r.PathValue("app")
+	var app *state.App
+	if state.ValidateAppName(name) == nil {
+		app, _ = d.Store.App(name)
+	}
+	if app == nil || app.Webhook.Secret == "" || !github.VerifySignature(app.Webhook.Secret, body, r.Header.Get("X-Hub-Signature-256")) {
+		if d.recent("fail:"+ip, true) == 1 {
+			d.event(state.Event{Kind: "webhook.rejected", App: name, Message: "bad signature from " + ip})
+		}
+		http.Error(w, "bad signature", http.StatusUnauthorized)
 		return
 	}
-	if app.Webhook.Secret == "" || !github.VerifySignature(app.Webhook.Secret, body, r.Header.Get("X-Hub-Signature-256")) {
-		d.event(state.Event{Kind: "webhook.rejected", App: name, Message: "bad signature from " + r.Header.Get("Cf-Connecting-Ip")})
-		http.Error(w, "bad signature", http.StatusUnauthorized)
+	if d.recent("app:"+name, true) > hookRateLimit {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
 		return
 	}
 	event := r.Header.Get("X-GitHub-Event")

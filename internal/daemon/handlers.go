@@ -160,6 +160,19 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 	if err := state.ValidateAppName(p.Name); err != nil {
 		return nil, err
 	}
+	if err := state.ValidateRepo(p.Repo); err != nil {
+		return nil, err
+	}
+	if p.Branch != "" {
+		if err := state.ValidateRef("branch", p.Branch); err != nil {
+			return nil, err
+		}
+	}
+	if p.Path != "" {
+		if err := state.ValidateRef("path", strings.Trim(p.Path, "/")); err != nil {
+			return nil, err
+		}
+	}
 	if d.Store.AppExists(p.Name) {
 		return nil, fmt.Errorf("app %q already exists", p.Name)
 	}
@@ -343,6 +356,11 @@ func (d *Daemon) hDeploy(ctx context.Context, params json.RawMessage, out io.Wri
 	var p AppParams
 	if err := decode(params, &p); err != nil {
 		return nil, err
+	}
+	if p.Ref != "" {
+		if err := state.ValidateRef("ref", p.Ref); err != nil {
+			return nil, err
+		}
 	}
 	trigger := p.Trigger
 	if trigger == "" {
@@ -545,11 +563,21 @@ type DomainParams struct {
 	Force bool   `json:"force,omitempty"` // replace an existing DNS record
 }
 
-func validHost(h string) error {
-	if h == "" || strings.ContainsAny(h, "/: ") || !strings.Contains(h, ".") {
-		return fmt.Errorf("invalid hostname %q", h)
+// reservedHost reports whether host is one Berth already serves itself:
+// the webhook host, an app's own <app>.<domain>, or a LAN/tailnet name.
+func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
+	if cfg.Domain != "" {
+		if host == "hooks."+cfg.Domain {
+			return "Berth's webhook hostname"
+		}
+		if first, rest, ok := strings.Cut(host, "."); ok && rest == cfg.Domain && d.Store.AppExists(first) {
+			return "the hostname of app " + first
+		}
 	}
-	return nil
+	if strings.HasSuffix(host, ".local") || (cfg.TailnetDomain != "" && strings.HasSuffix(host, "."+cfg.TailnetDomain)) {
+		return "a LAN or tailnet name Berth assigns itself"
+	}
+	return ""
 }
 
 func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io.Writer) (any, error) {
@@ -558,12 +586,18 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 		return nil, err
 	}
 	p.Host = strings.ToLower(strings.TrimSuffix(p.Host, "."))
-	if err := validHost(p.Host); err != nil {
+	if err := state.ValidateHostname(p.Host); err != nil {
+		return nil, err
+	}
+	if _, err := d.Store.App(p.App); err != nil {
 		return nil, err
 	}
 	cfg, err := d.Store.Config()
 	if err != nil {
 		return nil, err
+	}
+	if what := d.reservedHost(cfg, p.Host); what != "" {
+		return nil, fmt.Errorf("%s is %s", p.Host, what)
 	}
 	if cfg.NoTunnel {
 		return nil, fmt.Errorf("custom domains need the Cloudflare tunnel (berth was set up with --no-tunnel)")

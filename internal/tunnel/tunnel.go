@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -400,8 +401,22 @@ type rulesetRule struct {
 
 // FilterExpression blocks requests to the webhook host unless they come
 // from GitHub's hook ranges.
-func FilterExpression(hooksHost string, ranges []string) string {
-	return fmt.Sprintf(`(http.host eq "%s" and not ip.src in {%s})`, hooksHost, strings.Join(ranges, " "))
+// Only well-formed CIDRs from GitHub's /meta are used, and the host must be
+// a plain DNS name, so nothing can break out of the expression.
+func FilterExpression(hooksHost string, ranges []string) (string, error) {
+	if strings.ContainsAny(hooksHost, "\" \\{}") {
+		return "", fmt.Errorf("invalid webhook host %q", hooksHost)
+	}
+	var cidrs []string
+	for _, r := range ranges {
+		if p, err := netip.ParsePrefix(r); err == nil {
+			cidrs = append(cidrs, p.String())
+		}
+	}
+	if len(cidrs) == 0 {
+		return "", fmt.Errorf("no valid GitHub hook IP ranges")
+	}
+	return fmt.Sprintf(`(http.host eq "%s" and not ip.src in {%s})`, hooksHost, strings.Join(cidrs, " ")), nil
 }
 
 // SetWebhookFilter installs or updates Berth's WAF custom rule, preserving
@@ -414,7 +429,11 @@ func (a *API) SetWebhookFilter(ctx context.Context, zoneID, hooksHost string, ra
 	if err := a.do(ctx, "GET", path, nil, &rs); err != nil && !strings.Contains(err.Error(), "not found") {
 		return err
 	}
-	ours := rulesetRule{Ref: filterRuleRef, Expression: FilterExpression(hooksHost, ranges), Action: "block", Description: "berth: only GitHub may call the webhook endpoint", Enabled: true}
+	expr, err := FilterExpression(hooksHost, ranges)
+	if err != nil {
+		return err
+	}
+	ours := rulesetRule{Ref: filterRuleRef, Expression: expr, Action: "block", Description: "berth: only GitHub may call the webhook endpoint", Enabled: true}
 	var rules []rulesetRule
 	replaced := false
 	for _, r := range rs.Rules {

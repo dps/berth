@@ -93,6 +93,9 @@ func runInit(o initOpts) error {
 	}
 	if o.domain != "" {
 		cfg.Domain = strings.ToLower(strings.TrimSuffix(o.domain, "."))
+		if err := state.ValidateHostname(cfg.Domain); err != nil {
+			return err
+		}
 	}
 	if o.noTunnel {
 		cfg.NoTunnel = true

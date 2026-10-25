@@ -237,3 +237,33 @@ Findings are ordered by severity; each names the file, the impact, and the fix.
   rate limit past ~1 app — availability note, not a vulnerability.
 - `cloudflared --no-autoupdate` pins the tunnel binary to Homebrew
   updates; worth a conscious decision either way.
+
+---
+
+## Disposition (Oct 25, 2026)
+
+Each finding was checked against the code and, where it mattered, against
+the running system before deciding. Fixed in the commit after `521a45b`.
+
+| Finding | Decision |
+| --- | --- |
+| H-1 shell injection via `--branch` | **Fixed.** Branches, paths and refs are validated (git ref rules, no leading `-`) in the RPC handlers, and the hook single-quotes every field. A test runs the generated hook with hostile app, branch, path and binary names and checks nothing executes; it fails against the old hook. |
+| M-1 git option injection | **Fixed.** Repos can't start with `-` or contain shell metacharacters; `ls-remote` and `Resolve` refuse option-like arguments. |
+| M-2 `redis:unlink` didn't revoke | **Fixed differently.** Rotating the shared password would redeploy every other linked app; instead each link gets its own Redis ACL user (persisted in `/data/users.acl`), and unlink runs `ACL DELUSER`. Verified on the real install: the app's credentials return `OK PONG` while linked and `WRONGPASS` after unlink. Existing services migrate on their next link. |
+| M-3 rate limit before auth; 404 vs 401 | **Fixed.** Bad signatures are limited per source IP before any work; only authenticated deliveries use the app's budget; unknown apps return 401 like a bad signature. Test: 50 junk requests from one IP don't block a signed delivery. |
+| M-4 passwords in argv | **Fixed for SQL** (now over stdin to `psql`; Redis ACL commands likewise). **Not fixed for multi-line env values**: `container run --env-file` can't carry newlines, so `-e` is the only way; the design doc now states this exception instead of claiming there is none. |
+| M-5 WAF expression interpolation | **Fixed.** `--domain` is validated as a hostname; CIDRs from `/meta` go through `netip.ParsePrefix`; a host with quotes is refused. |
+| M-6 wildcard / colliding custom domains | **Fixed.** Hostnames must be plain DNS names; collisions with `hooks.<domain>`, other apps' `<app>.<domain>` and `.local`/tailnet names are refused. |
+| L-1 `config.json` 0644 | **Fixed** (0600). The underlying risk is small: `~/.berth` is `drwx------`, so nothing under it was readable by other users. Data dirs left as they are for the same reason (and tightening them risks breaking bind mounts). |
+| L-2 unbounded build log / RPC line buffer | **Fixed.** Build logs stop at 50 MB with a note; RPC lines over 64 KB are sent in pieces. |
+| L-3 `rand.Read` errors ignored | **No change.** Since Go 1.24, `crypto/rand.Read` never returns an error (it crashes the program), so there's no all-zero-secret path. |
+| L-4 `--as` unvalidated | **Fixed** (`ValidateEnvKey`). |
+| L-5 predictable TMPDIR socket | **No change.** On macOS `$TMPDIR` is a per-user `drwx------` directory, so the path isn't reachable by other users, and the fallback only applies when `BERTH_HOME` is extremely long. |
+| L-6 trusting `name` inside `app.json` | **Fixed.** The directory name is authoritative. |
+| L-7 DNS before app check | **Fixed.** `domains:add` checks the app exists first. |
+| L-8 stale `berth run` env files | **Fixed.** Files older than an hour are swept on the next `berth run`. |
+| L-9 restore honours archive modes | **Fixed.** Extracted files are 0600, directories 0700. |
+| L-10 masking gaps | **Fixed.** Masks any `_`-separated word like `TOKEN`, `SECRET`, `AUTH`, `PASS`, `DSN`…, plus any value that is a URL with a password or a PEM block. |
+| B-1 whitespace round-trip | **Fixed.** Values with leading/trailing whitespace are quoted. |
+| Note: unauthenticated polling hits GitHub's 60/hr limit | **Fixed.** Without a token, GitHub repos are polled with `git ls-remote`. |
+| Note: `cloudflared --no-autoupdate` | **Kept**, deliberately: Homebrew owns cloudflared's updates, and self-updating binaries would fight it. |

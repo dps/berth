@@ -26,8 +26,11 @@ func TestIngressOrder(t *testing.T) {
 }
 
 func TestFilterExpression(t *testing.T) {
-	e := FilterExpression("hooks.x.com", []string{"192.30.252.0/22", "2a0a:a440::/29"})
-	if e != `(http.host eq "hooks.x.com" and not ip.src in {192.30.252.0/22 2a0a:a440::/29})` {
-		t.Fatal(e)
+	e, err := FilterExpression("hooks.x.com", []string{"192.30.252.0/22", "2a0a:a440::/29", `1.2.3.4/32"} or true or {"`})
+	if err != nil || e != `(http.host eq "hooks.x.com" and not ip.src in {192.30.252.0/22 2a0a:a440::/29})` {
+		t.Fatal(e, err)
+	}
+	if _, err := FilterExpression(`x" or true or "`, []string{"1.2.3.0/24"}); err == nil {
+		t.Fatal("quoted host accepted")
 	}
 }

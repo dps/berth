@@ -123,7 +123,7 @@ func cmdConfigShow() *cobra.Command {
 			}
 			shown := state.Env{}
 			for k, v := range env {
-				if !reveal && state.IsSecretKey(k) {
+				if !reveal && (state.IsSecretKey(k) || state.IsSecretValue(v)) {
 					v = state.Mask(v)
 				}
 				shown[k] = v

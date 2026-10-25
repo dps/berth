@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,8 +53,23 @@ func TestCreateAndLink(t *testing.T) {
 	}
 	env := state.Env{}
 	v, url, err := m.Link(ctx, "redis", "cache", "web", "", env)
-	if err != nil || v != "REDIS_URL" || url != "redis://:"+sv.Password+"@192.168.66.1:6001" {
-		t.Fatalf("link: %s %s %v", v, url, err)
+	sv, _ = s.Service("redis", "cache")
+	l := sv.Links["web"]
+	if err != nil || v != "REDIS_URL" || l.Role != "web" || l.Password == sv.Password ||
+		url != "redis://web:"+l.Password+"@192.168.66.1:6001" {
+		t.Fatalf("link should get its own Redis user: %s %s %+v %v", v, url, l, err)
+	}
+	if _, err := m.Unlink(ctx, "redis", "cache", "web"); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, c := range m.RT.(*runtime.Fake).CallLog("exec redis-cache") {
+		if strings.HasSuffix(c, "--no-auth-warning") {
+			n++
+		}
+	}
+	if calls := m.RT.(*runtime.Fake).CallLog("exec redis-cache"); n != 2 {
+		t.Fatalf("want ACL SETUSER then ACL DELUSER via redis-cli, got %v", calls)
 	}
 	// A second Postgres-style variable name when REDIS_URL belongs to another service.
 	env["REDIS_URL"] = "redis://:x@192.168.66.1:9999"

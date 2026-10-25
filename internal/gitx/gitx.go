@@ -105,6 +105,9 @@ func FetchSHA(ctx context.Context, dir, sha string, auth Auth) error {
 // Resolve turns a ref or (abbreviated) sha into a full commit sha. It tries
 // remote branches first, then local ones (pushed via `git push berth`).
 func Resolve(ctx context.Context, dir, ref string) (string, error) {
+	if strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("unknown ref %q", ref)
+	}
 	for _, cand := range []string{"refs/remotes/origin/" + ref, "refs/heads/" + ref, ref} {
 		if sha, err := git(ctx, Auth{}, "--git-dir", dir, "rev-parse", "--verify", "--quiet", cand+"^{commit}"); err == nil && sha != "" {
 			return sha, nil
@@ -164,6 +167,9 @@ func Touches(ctx context.Context, dir, old, new, path string) bool {
 
 // LsRemote returns the sha of branch on url (polling for non-GitHub repos).
 func LsRemote(ctx context.Context, url, branch string, auth Auth) (string, error) {
+	if strings.HasPrefix(url, "-") {
+		return "", fmt.Errorf("invalid repository %q", url)
+	}
 	out, err := git(ctx, auth, "ls-remote", url, "refs/heads/"+branch)
 	if err != nil {
 		return "", err
@@ -175,16 +181,24 @@ func LsRemote(ctx context.Context, url, branch string, auth Auth) (string, error
 	return f[0], nil
 }
 
+// shellQuote wraps s in single quotes for POSIX sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // InstallPostReceive writes a hook that hands pushes of branch to berth.
+// Every interpolated value is single-quoted for the shell (branch and app are
+// also validated at creation, but the hook must be safe on its own).
 func InstallPostReceive(dir, berthBin, berthHome, app, branch string) error {
 	hook := fmt.Sprintf(`#!/bin/sh
-# Installed by berth: deploy pushes to %[3]s.
-export BERTH_HOME=%[1]q
+# Installed by berth: deploy pushes to the app's branch.
+export BERTH_HOME=%[1]s
+want=%[3]s
 while read old new ref; do
-  if [ "$ref" = "refs/heads/%[3]s" ] && [ "$new" != "0000000000000000000000000000000000000000" ]; then
-    %[2]q deploy %[4]s --ref "$new"
+  if [ "$ref" = "$want" ] && [ "$new" != "0000000000000000000000000000000000000000" ]; then
+    %[2]s deploy %[4]s --ref "$new"
   fi
 done
-`, berthHome, berthBin, branch, app)
+`, shellQuote(berthHome), shellQuote(berthBin), shellQuote("refs/heads/"+branch), shellQuote(app))
 	return os.WriteFile(filepath.Join(dir, "hooks", "post-receive"), []byte(hook), 0o755)
 }

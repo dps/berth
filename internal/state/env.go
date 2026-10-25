@@ -99,7 +99,7 @@ func (e Env) Format() string {
 	var b strings.Builder
 	for _, k := range e.Keys() {
 		v := e[k]
-		if strings.ContainsAny(v, "\n\r\"") || strings.HasPrefix(v, "'") {
+		if strings.ContainsAny(v, "\n\r\"") || strings.HasPrefix(v, "'") || strings.TrimSpace(v) != v {
 			v = strconv.Quote(v)
 		}
 		fmt.Fprintf(&b, "%s=%s\n", k, v)
@@ -134,12 +134,25 @@ func (e Env) Clone() Env {
 // IsSecretKey reports whether config:show should mask the value.
 func IsSecretKey(k string) bool {
 	u := strings.ToUpper(k)
-	for _, suf := range []string{"_KEY", "_SECRET", "_TOKEN", "PASSWORD"} {
-		if strings.HasSuffix(u, suf) {
+	for _, word := range strings.Split(u, "_") {
+		switch word {
+		case "KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "PASS", "PWD", "AUTH",
+			"CREDENTIAL", "CREDENTIALS", "PRIVATE", "DSN", "COOKIE", "SALT":
 			return true
 		}
 	}
-	return u == "DATABASE_URL" || u == "REDIS_URL"
+	return strings.HasSuffix(u, "PASSWORD")
+}
+
+// IsSecretValue catches credentials in values whatever the key is called,
+// such as URLs with a password (postgres://user:pw@host/db).
+func IsSecretValue(v string) bool {
+	if i := strings.Index(v, "://"); i > 0 {
+		if at := strings.Index(v[i+3:], "@"); at > 0 && strings.Contains(v[i+3:i+3+at], ":") {
+			return true
+		}
+	}
+	return strings.Contains(v, "-----BEGIN ")
 }
 
 func Mask(v string) string {

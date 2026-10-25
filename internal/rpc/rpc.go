@@ -27,6 +27,8 @@ type Message struct {
 	Done   bool            `json:"done,omitempty"`
 }
 
+const maxLine = 64 << 10
+
 // Stream is the server side of one call: an io.Writer for progress output.
 type Stream struct {
 	mu  sync.Mutex
@@ -45,6 +47,12 @@ func (s *Stream) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buf = append(s.buf, p...)
+	// A very long line without a newline is sent in pieces rather than
+	// buffered without limit.
+	for len(s.buf) > maxLine {
+		s.send(Message{Log: string(s.buf[:maxLine])})
+		s.buf = s.buf[maxLine:]
+	}
 	for {
 		i := bytes.IndexByte(s.buf, '\n')
 		if i < 0 {

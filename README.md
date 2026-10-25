@@ -348,7 +348,8 @@ the old data volume until you delete it.
 Linking a second database to the same app names its variable after it
 (`PG_ANALYTICS_URL`); choose your own with `--as`.
 
-**Redis** works the same way, with `REDIS_URL` and append-only persistence:
+**Redis** works the same way, with `REDIS_URL` and append-only persistence.
+Each linked app gets its own Redis user, so unlinking revokes just that app:
 
 ```bash
 berth redis:create cache

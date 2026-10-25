@@ -57,16 +57,63 @@ func TestContainerEnvFileSplitsMultiline(t *testing.T) {
 }
 
 func TestSecretMasking(t *testing.T) {
-	for _, k := range []string{"OPENAI_API_KEY", "GH_TOKEN", "SESSION_SECRET", "DB_PASSWORD", "DATABASE_URL"} {
+	for _, k := range []string{"OPENAI_API_KEY", "GH_TOKEN", "SESSION_SECRET", "DB_PASSWORD", "TOKEN", "SECRET", "AUTH_HEADER", "DBPASSWORD", "SENTRY_DSN", "PRIVATE_KEY_PEM"} {
 		if !IsSecretKey(k) {
 			t.Errorf("%s should be masked", k)
 		}
 	}
-	if IsSecretKey("PORT") || IsSecretKey("NODE_ENV") {
-		t.Error("PORT/NODE_ENV should not be masked")
+	for _, k := range []string{"PORT", "NODE_ENV", "MONKEY", "BYPASS_CACHE", "OAUTH_CLIENT_ID", "DATABASE_URL"} {
+		if IsSecretKey(k) {
+			t.Errorf("%s should not be masked by name", k)
+		}
+	}
+	for _, v := range []string{"postgres://app:pw@192.168.66.1:6001/db", "redis://:pw@h:1", "-----BEGIN PRIVATE KEY-----\nabc"} {
+		if !IsSecretValue(v) {
+			t.Errorf("%q should be masked by value", v)
+		}
+	}
+	if IsSecretValue("https://example.com/path") || IsSecretValue("postgres://user@host/db") {
+		t.Error("URL without a password masked")
 	}
 	if m := Mask("sk-abcdefgh"); strings.Contains(m, "abcdef") {
 		t.Errorf("mask leaked: %s", m)
+	}
+}
+
+func TestEnvWhitespaceRoundTrip(t *testing.T) {
+	e := Env{"PADDED": " secret ", "TAB": "\tx"}
+	got, err := ParseEnv(strings.NewReader(e.Format()))
+	if err != nil || got["PADDED"] != " secret " || got["TAB"] != "\tx" {
+		t.Fatalf("got %q %q (%v)", got["PADDED"], got["TAB"], err)
+	}
+}
+
+func TestValidators(t *testing.T) {
+	for _, ok := range []string{"main", "feature/x-1", "release-2.0", "v1.2.3"} {
+		if ValidateRef("branch", ok) != nil {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "-x", `x" ]; evil; #`, "a b", "a..b", "x.lock", "/x", "x/", "a$b", "a`b`", "a;b"} {
+		if ValidateRef("branch", bad) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	for _, bad := range []string{"--upload-pack=touch /tmp/x", "me/app;rm", "me/a b"} {
+		if ValidateRepo(bad) == nil {
+			t.Errorf("repo %q accepted", bad)
+		}
+	}
+	if ValidateRepo("me/app") != nil || ValidateRepo("https://gitlab.com/x/y.git") != nil || ValidateRepo("/Users/me/code/app") != nil {
+		t.Error("good repo rejected")
+	}
+	for _, bad := range []string{"*.example.com", "example", "a_b.com", "x.com\" or", "-x.com"} {
+		if ValidateHostname(bad) == nil {
+			t.Errorf("host %q accepted", bad)
+		}
+	}
+	if ValidateHostname("www.mysite.com") != nil {
+		t.Error("good host rejected")
 	}
 }
 

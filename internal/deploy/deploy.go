@@ -348,7 +348,7 @@ func (d *Deployer) build(ctx context.Context, app *state.App, env state.Env, rel
 		Context:    dir,
 		BuildArgs:  buildArgs(env),
 		NoCache:    noCache,
-		Out:        io.MultiWriter(lf, indent(out)),
+		Out:        io.MultiWriter(&capWriter{w: lf, left: maxBuildLog}, indent(out)),
 	})
 	if err != nil {
 		return err
@@ -1010,6 +1010,32 @@ func (d *Deployer) gc(ctx context.Context, app *state.App, env state.Env, cfg *s
 			}
 		}
 	}
+}
+
+const maxBuildLog = 50 << 20
+
+// capWriter stops writing after a limit (build logs), noting the cut once.
+type capWriter struct {
+	w    io.Writer
+	left int64
+	cut  bool
+}
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if c.left <= 0 {
+		if !c.cut {
+			c.cut = true
+			io.WriteString(c.w, "\n[berth: build log truncated at 50 MB]\n")
+		}
+		return len(p), nil
+	}
+	n := len(p)
+	if int64(n) > c.left {
+		p = p[:c.left]
+	}
+	m, err := c.w.Write(p)
+	c.left -= int64(m)
+	return n, err
 }
 
 type indentWriter struct {

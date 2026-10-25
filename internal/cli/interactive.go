@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -45,6 +47,15 @@ func cmdRun() *cobra.Command {
 			env, err := s.Env(app)
 			if err != nil {
 				return err
+			}
+			// Env files left by a `berth run` that was killed (SIGKILL skips
+			// cleanup) hold live secrets; sweep them.
+			if old, _ := filepath.Glob(s.Path("apps", app, ".run-env-*")); len(old) > 0 {
+				for _, f := range old {
+					if fi, err := os.Stat(f); err == nil && time.Since(fi.ModTime()) > time.Hour {
+						os.Remove(f)
+					}
+				}
 			}
 			// Live config (not the release snapshot): migrations want the
 			// settings you just changed.

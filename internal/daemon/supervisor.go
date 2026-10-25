@@ -431,7 +431,9 @@ func (d *Daemon) pollLoop(ctx context.Context) {
 // and enqueues a deploy when it moved.
 func (d *Daemon) pollApp(ctx context.Context, a *state.App) error {
 	var head string
-	if a.IsGitHub() && !a.DeployKey {
+	// The GitHub API allows only 60 unauthenticated requests an hour, so
+	// without a token GitHub repos are polled with git ls-remote instead.
+	if a.IsGitHub() && !a.DeployKey && d.githubToken() != "" {
 		sha, etag, notModified, err := d.GitHubAPI(d.githubToken()).BranchHead(ctx, a.Repo, a.Branch, a.PollETag)
 		if err != nil {
 			return err
