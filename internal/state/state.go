@@ -80,6 +80,7 @@ type Config struct {
 	CaddyLANHTTP   string `json:"caddy_lan_http"` // :80 LAN redirect to HTTPS, empty disables
 	TunnelMetrics  string `json:"tunnel_metrics"` // cloudflared --metrics
 	DNSAddr        string `json:"dns_addr"`       // berthd\'s SRV responder for Caddy upstreams
+	AuthAddr       string `json:"auth_addr"`      // berthd's sign-in server, behind Caddy
 	PortMin        int    `json:"port_min"`
 	PortMax        int    `json:"port_max"`
 	ServicePortMin int    `json:"service_port_min"`
@@ -106,6 +107,7 @@ func DefaultConfig() *Config {
 		CaddyHTTPS:      ":443",
 		TunnelMetrics:   "127.0.0.1:20241",
 		DNSAddr:         "127.0.0.1:7753",
+		AuthAddr:        "127.0.0.1:7781",
 		PortMin:         8001,
 		PortMax:         8999,
 		ServicePortMin:  6001,
@@ -180,6 +182,7 @@ type App struct {
 	Slots      []int      `json:"slots,omitempty"` // two fixed host ports; releases alternate between them
 	Links      []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
 	Auth       *BasicAuth `json:"auth,omitempty"`
+	Access     *Access    `json:"access,omitempty"` // sign-in policy; nil = none
 	DeployKey  bool       `json:"deploy_key,omitempty"`
 	Stopped    bool       `json:"stopped,omitempty"`
 	PollETag   string     `json:"poll_etag,omitempty"`
@@ -206,7 +209,7 @@ func (a *App) CloneURL() string {
 
 var appNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-var reservedNames = map[string]bool{"hooks": true, "berth": true, "www": true}
+var reservedNames = map[string]bool{"hooks": true, "berth": true, "www": true, "auth": true}
 
 // ValidateAppName enforces DNS-label names that do not collide with
 // Berth's own hostnames or service container names.

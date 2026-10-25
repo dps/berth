@@ -100,9 +100,11 @@ func NewRoot() *cobra.Command {
 	add("apps", cmdCreate(), cmdDestroy(), cmdStop(), cmdStart(), cmdReleases(),
 		cmdConfigGet(), cmdConfigUnset(), cmdConfigShow(), cmdConfigImport(),
 		cmdDomainsAdd(), cmdDomainsRemove(), cmdDomainsList(),
-		cmdAuthSet(), cmdAuthUnset(),
+		cmdAuthSet(), cmdAuthUnset(), cmdAccess(),
 		cmdStorageMount(), cmdStorageUnmount(), cmdStorageList(),
 		cmdRun(), cmdExec(), cmdDockerfile(), cmdGitRemote(), cmdSetKey())
+	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in:"})
+	add("signin", cmdAuthSetup(), cmdAuthStatus(), cmdAuthGroup(), cmdAuthSessions(), cmdAuthRevoke())
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),

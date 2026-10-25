@@ -27,16 +27,24 @@ type Route struct {
 	AuthUser    string
 	AuthHash    string // bcrypt
 	AccessLog   string
+	// SignIn routes /_berth/* to berthd's sign-in server and checks every
+	// request with it (forward_auth); Private also marks responses
+	// Cache-Control private so Cloudflare never caches them for others.
+	SignIn  bool
+	Private bool
 }
 
 type Options struct {
-	Admin       string // 127.0.0.1:2019
-	HTTPListen  string // 127.0.0.1:80
-	HTTPSListen string // :443, empty disables the LAN server
-	DNSAddr     string // berthd's SRV responder, e.g. 127.0.0.1:7753
-	SRVDomain   string // berth.internal
-	LANHTTP     string // :80 redirect to HTTPS on the LAN, empty disables
-	StorageDir  string // Caddy's data dir (internal CA lives here)
+	Admin       string   // 127.0.0.1:2019
+	HTTPListen  string   // 127.0.0.1:80
+	HTTPSListen string   // :443, empty disables the LAN server
+	DNSAddr     string   // berthd's SRV responder, e.g. 127.0.0.1:7753
+	SRVDomain   string   // berth.internal
+	AuthAddr    string   // berthd's sign-in server, e.g. 127.0.0.1:7781
+	AuthHost    string   // auth.<domain>; empty when sign-in isn't set up
+	IDHeaders   []string // identity headers: always stripped from clients, copied from forward_auth
+	LANHTTP     string   // :80 redirect to HTTPS on the LAN, empty disables
+	StorageDir  string   // Caddy's data dir (internal CA lives here)
 	Routes      []Route
 }
 
@@ -88,6 +96,16 @@ func Build(o Options) obj {
 				lanLoggers[host] = []string{logger}
 			}
 		}
+	}
+	if o.AuthHost != "" && o.AuthAddr != "" {
+		tunnelRoutes = append([]any{obj{
+			"match": []any{obj{"host": []string{o.AuthHost}}},
+			"handle": []any{
+				obj{"handler": "headers", "response": obj{"set": obj{"Connection": []string{"close"}}}},
+				obj{"handler": "reverse_proxy", "upstreams": []any{obj{"dial": o.AuthAddr}}},
+			},
+			"terminal": true,
+		}}, tunnelRoutes...)
 	}
 	notFound := obj{"handle": []any{obj{
 		"handler":     "static_response",
@@ -162,6 +180,10 @@ func Build(o Options) obj {
 
 func handlers(r Route, o Options) []any {
 	var hs []any
+	if len(o.IDHeaders) > 0 {
+		// Identity headers only ever come from berthd, never the client.
+		hs = append(hs, obj{"handler": "headers", "request": obj{"delete": o.IDHeaders}})
+	}
 	if r.AuthUser != "" {
 		hs = append(hs, obj{
 			"handler": "authentication",
@@ -172,6 +194,53 @@ func handlers(r Route, o Options) []any {
 			}},
 		})
 	}
+	if r.SignIn && o.AuthAddr != "" {
+		rest := appHandlers(r, o)
+		if r.Private {
+			rest = append([]any{obj{"handler": "headers", "response": obj{"deferred": true, "set": obj{"Cache-Control": []string{"private, no-cache"}}}}}, rest...)
+		}
+		rest = append([]any{forwardAuth(o)}, rest...)
+		return append(hs, obj{"handler": "subroute", "routes": []any{
+			obj{
+				"match":    []any{obj{"path": []string{"/_berth/*"}}},
+				"handle":   []any{obj{"handler": "reverse_proxy", "upstreams": []any{obj{"dial": o.AuthAddr}}}},
+				"terminal": true,
+			},
+			obj{"handle": rest},
+		}})
+	}
+	return append(hs, appHandlers(r, o)...)
+}
+
+// forwardAuth asks berthd about the request (what Caddy's forward_auth
+// directive expands to): a 2xx lets it through with the identity headers
+// copied onto it; anything else (redirect to sign in, 401, 403) goes back
+// to the client as is.
+func forwardAuth(o Options) obj {
+	routes := []any{}
+	for _, h := range o.IDHeaders {
+		ph := "{http.reverse_proxy.header." + h + "}"
+		routes = append(routes,
+			obj{"handle": []any{obj{"handler": "headers", "request": obj{"delete": []string{h}}}}},
+			obj{
+				"match":  []any{obj{"not": []any{obj{"vars": obj{ph: []string{""}}}}}},
+				"handle": []any{obj{"handler": "headers", "request": obj{"set": obj{h: []string{ph}}}}},
+			})
+	}
+	return obj{
+		"handler":   "reverse_proxy",
+		"upstreams": []any{obj{"dial": o.AuthAddr}},
+		"rewrite":   obj{"method": "GET", "uri": "/_berth/check"},
+		"headers": obj{"request": obj{"set": obj{
+			"X-Forwarded-Method": []string{"{http.request.method}"},
+			"X-Forwarded-Uri":    []string{"{http.request.uri}"},
+		}}},
+		"handle_response": []any{obj{"match": obj{"status_code": []int{2}}, "routes": routes}},
+	}
+}
+
+func appHandlers(r Route, o Options) []any {
+	var hs []any
 	if r.Service == "" {
 		return append(hs, obj{
 			"handler":     "static_response",

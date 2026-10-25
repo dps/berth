@@ -189,6 +189,49 @@ TLS terminates at Cloudflare's edge; the tunnel is an outbound QUIC connection, 
 
 **No-tunnel mode** (`berth init --no-tunnel`): LAN hostnames only, or pair with Tailscale for private-but-remote access. `berth init --tailscale` reads the tailnet's MagicDNS suffix, and berthd advertises each app as a Tailscale Service (`tailscale serve --service=svc:<app> --https=443 --bg http://127.0.0.1:7780`), so it is reachable as `https://<app>.<tailnet>.ts.net`; Caddy routes that hostname like any other. Each service must be approved once in the Tailscale admin console (or auto-approved by tag).
 
+## Sign-in
+
+Berth can put Google sign-in in front of any app, so a hobby app gets accounts without writing OAuth code. One Google OAuth client serves every app; berthd runs the login, keeps the sessions, and hands the app the signed-in person as request headers. The provider sits behind a small interface (build the authorization URL, exchange the code for an identity), so GitHub sign-in can be added later without touching the rest.
+
+**Access levels.** Each app has no access policy by default (Caddy proxies it as before, berthd isn't involved). `berth access` turns one on, with a default level and optional per-path rules:
+
+| Level | Behaviour |
+| --- | --- |
+| `public` | anyone can visit; a signed-in visitor's identity is still passed to the app |
+| `signed-in` | any Google account; visitors who aren't signed in are sent to sign in |
+| `allow <who...>` | only the listed people: exact emails (`alice@gmail.com`), Google Workspace domains (`@example.com`, matched against the `hd` claim Google vouches for, not the email's text), or named groups (`@family`) |
+
+```
+berth access chirp public                   # landing page and timeline open; the app sees who is signed in
+berth access chirp /compose/* signed-in     # path rule: a trailing * is a prefix, the longest match wins
+berth access chirp /admin/* allow @family you@gmail.com
+berth access chirp /compose/* --remove      # drop a rule;  berth access chirp off  removes the policy
+berth auth:group family alice@gmail.com bob@example.com
+```
+
+Membership is checked on every request, so changing an allow list or a group takes effect on the visitor's next request. Rules match paths only; an app that wants "anyone can read, signed-in users can post" uses `public` and checks the headers on its write endpoints (Chirp does this).
+
+**Request flow.** For an app with a policy, Caddy's route is:
+
+1. delete any `X-Berth-*` request headers the client sent (every app's route does this, policy or not);
+2. `/_berth/*` → reverse proxy to berthd's auth server (`127.0.0.1:7781`), Host preserved;
+3. `forward_auth`: a `GET /_berth/check` to berthd carrying the original Host, cookies and `X-Forwarded-Uri`. berthd answers 200 with identity headers (empty for an anonymous visitor on a public path), a 302 to `/_berth/login` for a browser that must sign in, 401 for other clients (API calls, non-GET), or a 403 page for a signed-in person who isn't allowed (with "switch account"). Caddy copies the 2xx identity headers onto the request and proxies to the app as usual; anything else goes back to the client. Apps with any non-public rule also get `Cache-Control: private, no-cache` on every response, so Cloudflare never caches a members-only page or asset for someone else.
+
+The app receives `X-Berth-User-Id` (`google:<sub>`, stable for life), `X-Berth-Email`, `X-Berth-Name`, `X-Berth-Picture`, and `X-Berth-Identity`: a 5-minute EdDSA JWT (audience = the hostname) for apps that want to verify instead of trusting the proxy; the public key is at `/_berth/jwks.json`. App ports are published on `127.0.0.1` only, so Caddy is the only way in from the network. Every app also gets `/_berth/login?return=/path`, `/_berth/logout` (POST, same-origin only; GET shows a confirm button), and `/_berth/me` (the identity as JSON, for single-page apps). Locally (`npm run dev`, no Berth) the headers are absent and the app sees an anonymous visitor.
+
+**Login.** Google needs a fixed list of redirect URIs and only accepts public hostnames, so there is one sign-in host, `auth.<domain>` by default (already covered by the wildcard DNS record, tunnel rule and Cloudflare certificate). `auth:setup --host signin.<domain>` picks another name directly under the domain; setup refuses a name that is an app or has its own DNS record (the first real install had `auth.cronbon.com` pointing at another server), and `create` and `domains:add` refuse the sign-in host afterwards:
+
+1. `chirp.<domain>/_berth/login?return=/compose` stores `{host, return}` under a random nonce, sets the nonce in a short-lived host-only cookie, and redirects to `auth.<domain>/start?host=chirp.<domain>&n=sha256(nonce)`.
+2. `auth.<domain>/start` refuses hosts that aren't Berth apps. If the browser already has a session on the auth host, it skips Google. Otherwise it redirects to Google with `state`, an OIDC `nonce` and PKCE, remembering them under `state` (also set as a cookie on the auth host).
+3. Google returns to `auth.<domain>/callback`. berthd checks `state` against the cookie, exchanges the code (with the PKCE verifier and client secret) and reads the ID token it got straight from Google's token endpoint over TLS: issuer, audience, expiry, nonce, and `email_verified` must all check out. It creates a session on the auth host, so the next app's sign-in is a redirect, not a Google prompt.
+4. It issues a one-time code (60 s, bound to the app host and `sha256(nonce)`) and redirects to `chirp.<domain>/_berth/callback?code=…`. The app host consumes the code only if its own nonce cookie matches, which stops an attacker from logging a victim into the attacker's account, then sets `__Host-berth_session` (host-only, Secure, HttpOnly, SameSite=Lax) and redirects to `return`, which must be a path on the same host.
+
+The hand-off works for custom domains in other zones and for LAN and Tailscale hostnames too, because only the browser carries the code. Sessions live in `~/.berth/auth/sessions.json` (only hashes of the cookie values), last 30 days and are extended on use; logging out of one app signs the person out of every app and the auth host. `berth auth:sessions` lists them and `berth auth:revoke <email>` ends them.
+
+**Setup** is one command (`berth auth:setup google [--host h]`), because Google has no API for creating OAuth clients: `berth auth:setup google` prints the steps for the Google Cloud console (create a Web application client, add `https://auth.<domain>/callback` as the redirect URI, publish the consent screen; only the `openid email profile` scopes are requested, which need no Google verification) and asks for the client ID and secret. The ID goes in `~/.berth/auth/config.json`, the secret in `secrets/google.client_secret`, the session-signing key in `secrets/auth.key`. Visiting `https://auth.<domain>/` shows who is signed in, which makes a good first test.
+
+Basic auth (`berth auth:set`) remains for sites where a password is simpler; it runs before the access check.
+
 ## Storage
 
 Postgres is the built-in service; everything else is a bind-mounted folder. Both keep data on the Mac's own disk under `~/.berth`, so Time Machine (or any backup the user already has) covers it with no extra setup — via nightly dumps for Postgres, directly for app folders.
@@ -298,6 +341,7 @@ The attack surface is two HTTP endpoints behind Cloudflare, nothing else. The th
 - **Secrets**: never logged (debug logs redact `-e` values), masked in `config:show` (by name, and by value for URLs with a password and PEM blocks), never in build args unless the user opts in with `berth config:set --build-arg`; env snapshots, service env files and `config.json` are 0600 under a 0700 `~/.berth`. Service passwords travel by `--env-file`, and role passwords reach `psql`/`redis-cli` over stdin, never argv. The one exception: an app env value containing a newline (a PEM key, say) must be passed to `container run` as `-e`, because `--env-file` can't carry newlines, so it is briefly visible in the process list while the container starts.
 - **Input validation**: values that reach git, shell hooks, Caddy matchers or Cloudflare expressions are validated where they enter: branches, paths and refs follow git ref rules and can't start with `-`; repos can't start with `-` or contain shell metacharacters; custom domains must be plain hostnames (no wildcards) and can't collide with `hooks.<domain>`, another app's `<app>.<domain>` or LAN/tailnet names; the `git push berth` hook single-quotes every field anyway.
 - **Supply chain**: images are pulled from the registry the Dockerfile names; Berth templates pin major tags (`node:22-slim`, `postgres:17`). `berth doctor --images` lists images with available updates.
+- **Sign-in**: Google login runs in berthd behind Caddy's `forward_auth` (see Sign-in). Clients can't forge identity headers (Caddy deletes `X-Berth-*` on every route); one-time codes, nonce cookies and PKCE protect the login hand-off; redirects only go to Berth app hostnames and same-host paths; logout is POST with an Origin check; sessions are stored hashed. If berthd is down, apps with a policy answer 502, so `allow` and `signed-in` apps fail closed.
 - **Public by default is a choice**: `berth create --private` creates the app with no public hostname: its Caddy route matches only LAN/Tailscale hosts, so tunnel requests for it get a 404; `berth auth:set` adds basic auth in Caddy; both are one flag because the hobbyist default should be safe to flip either way.
 
 ## CLI reference
@@ -317,6 +361,8 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth config:set\|get\|unset\|show\|import <app> ...` | env vars | `config:*` |
 | `berth domains:add\|remove\|list <app> <host>` | extra hostnames via tunnel ingress | `domains:*` |
 | `berth auth:set\|unset <app> user:pass` | basic auth in Caddy | http-auth plugin |
+| `berth access <app> [path] <public\|signed-in\|allow who...\|off> [--remove]` | Google sign-in policy for an app or path | — |
+| `berth auth:setup google` / `auth:status` / `auth:group <name> [who...]` / `auth:sessions` / `auth:revoke <email>` | sign-in setup, groups and sessions | — |
 | `berth storage:mount\|unmount\|list <app> <path>` | persistent folders | `storage:*` |
 | `berth pg:create\|link\|unlink\|psql\|backup\|restore\|expose\|upgrade\|destroy\|list` | Postgres service | dokku-postgres |
 | `berth redis:*` | Redis service (same verbs; `redis:cli` instead of `pg:psql`) | dokku-redis |

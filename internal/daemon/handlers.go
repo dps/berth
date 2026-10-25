@@ -48,6 +48,11 @@ func (d *Daemon) handlers() map[string]handler {
 		"domains.remove":  d.hDomainsRemove,
 		"auth.set":        d.hAuthSet,
 		"auth.unset":      d.hAuthUnset,
+		"auth.setup":      d.hAuthSetup,
+		"auth.status":     d.hAuthStatus,
+		"auth.group":      d.hAuthGroup,
+		"auth.revoke":     d.hAuthRevoke,
+		"access.set":      d.hAccessSet,
 		"storage.mount":   d.hStorageMount,
 		"storage.unmount": d.hStorageUnmount,
 		"svc.create":      d.hSvcCreate,
@@ -159,6 +164,9 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 	}
 	if err := state.ValidateAppName(p.Name); err != nil {
 		return nil, err
+	}
+	if ac, _ := d.Store.AuthConfig(); ac != nil && ac.Host != "" && ac.Host == p.Name+"."+d.cfg().Domain {
+		return nil, fmt.Errorf("app name %q is taken by Berth's sign-in host %s", p.Name, ac.Host)
 	}
 	if err := state.ValidateRepo(p.Repo); err != nil {
 		return nil, err
@@ -569,6 +577,9 @@ func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
 	if cfg.Domain != "" {
 		if host == "hooks."+cfg.Domain {
 			return "Berth's webhook hostname"
+		}
+		if ac, _ := d.Store.AuthConfig(); ac != nil && host == ac.Host {
+			return "Berth's sign-in hostname"
 		}
 		if first, rest, ok := strings.Cut(host, "."); ok && rest == cfg.Domain && d.Store.AppExists(first) {
 			return "the hostname of app " + first

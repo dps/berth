@@ -35,6 +35,7 @@ berth rollback myapp                            # undo the last deploy
 - [Databases: Postgres and Redis](#databases-postgres-and-redis)
 - [Persistent storage](#persistent-storage)
 - [Hostnames, custom domains and access control](#hostnames-custom-domains-and-access-control)
+- [Sign in with Google](#sign-in-with-google)
 - [One-off commands and shells](#one-off-commands-and-shells)
 - [Running a Mac in a closet](#running-a-mac-in-a-closet)
 - [Backups and moving to a new Mac](#backups-and-moving-to-a-new-mac)
@@ -423,6 +424,84 @@ berth auth:set myapp alice:correct-horse-battery          # HTTP basic auth, enf
 berth auth:unset myapp
 ```
 
+## Sign in with Google
+
+Berth can put Google sign-in in front of any app, so you get accounts without
+writing OAuth code. Berth runs the login and tells your app who is signed in
+with request headers.
+
+### Set it up once
+
+```bash
+berth auth:setup google
+```
+
+Google doesn't let programs create OAuth clients, so the command walks you
+through a minute in the Google Cloud console: create a "Web application"
+client with the redirect URI it prints (`https://auth.<your domain>/callback`),
+publish the consent screen, and paste the client ID and secret. Every app
+shares that one client. Then open `https://auth.<your domain>` and sign in to
+check it works.
+
+If `auth.<your domain>` is already used for something else, pick another name:
+`berth auth:setup google --host signin.<your domain>`. Berth won't take over a
+name that already has its own DNS record.
+
+### Choose who gets in
+
+```bash
+berth access myapp public                      # anyone; the app still learns who is signed in
+berth access myapp signed-in                   # any Google account
+berth access myapp allow you@gmail.com @family @example.com
+berth access myapp /admin/* allow you@gmail.com   # a rule for some paths (* = prefix)
+berth access myapp /admin/* --remove
+berth access myapp                             # show the policy
+berth access myapp off                         # no sign-in at all
+```
+
+`allow` takes emails, Google Workspace domains (`@example.com`, which Google
+vouches for) and groups. Define a group once and use it in any app:
+
+```bash
+berth auth:group family alice@gmail.com bob@gmail.com
+```
+
+Changes to allow lists and groups take effect on the visitor's next request.
+A visitor who isn't signed in is sent to Google first; API calls get a 401
+instead. Someone signed in without access sees a "No access" page with a
+button to switch accounts.
+
+### In your app
+
+Requests reach your app with these headers. Berth deletes any `X-Berth-*`
+headers a visitor sends, so you can trust them.
+
+| Header | Value |
+| --- | --- |
+| `X-Berth-User-Id` | `google:<id>`, stable for the life of the account: key your users table on it |
+| `X-Berth-Email` | `you@gmail.com` |
+| `X-Berth-Name` | display name, URL-encoded (`decodeURIComponent`) |
+| `X-Berth-Picture` | avatar URL |
+| `X-Berth-Identity` | the same, as a 5-minute signed JWT (EdDSA), for apps that verify; the key is at `/_berth/jwks.json` |
+
+On a `public` app, the headers are absent for anonymous visitors. That's the
+pattern for a site anyone can read where signed-in people can post: check the
+header on your write endpoints and return 401 without it.
+
+Every app with a policy also has:
+
+| Path | What |
+| --- | --- |
+| `/_berth/login?return=/somewhere` | sign in, then come back |
+| `/_berth/logout` | sign out of every app (POST it from a form; GET shows a button) |
+| `/_berth/me` | who is signed in, as JSON, for single-page apps |
+
+Signing in to one app makes the next one a quick redirect with no Google
+prompt. Sessions last 30 days and renew while used. `berth auth:sessions`
+lists them, `berth auth:revoke <email>` signs someone out everywhere, and
+`berth auth:status` shows the setup, groups and app policies.
+[Chirp](https://github.com/dps/berth_chirp_node) is a complete example.
+
 ## One-off commands and shells
 
 ```bash
@@ -559,6 +638,8 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | **Hostnames and access** | |
 | `berth domains:add \| remove \| list <app> [host] [--force]` | custom domains |
 | `berth auth:set <app> user:pass` · `berth auth:unset <app>` | basic auth |
+| `berth access <app> [path] [public \| signed-in \| allow who... \| off] [--remove]` | Google sign-in policy |
+| `berth auth:setup google [--host h]` · `auth:status` · `auth:group <name> [who...]` · `auth:sessions` · `auth:revoke <email>` | sign-in setup, groups, sessions |
 | **Storage and services** | |
 | `berth storage:mount \| unmount \| list <app> [path]` | persistent folders |
 | `berth pg:create \| link \| unlink \| psql \| backup \| restore \| expose \| upgrade \| destroy \| list` | Postgres |
@@ -628,7 +709,7 @@ work. Each README lists the `berth` commands to deploy it.
 | Repo | Stack | Shows |
 | --- | --- | --- |
 | [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, storage mounts, crash recovery |
-| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres; build step, client-side routes |
+| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres with Google sign-in; build step, client-side routes |
 | [berth_hello_go](https://github.com/dps/berth_hello_go) | Go standard library | static binary on Alpine |
 | [berth_hello_rust](https://github.com/dps/berth_hello_rust) | Rust + axum | cached dependency builds (4 s redeploys) |
 

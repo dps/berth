@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dps/berth/internal/auth"
 	"github.com/dps/berth/internal/caddy"
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/github"
@@ -62,6 +63,7 @@ type Daemon struct {
 	tunnelRetry   atomic.Bool // a tunnel config update failed; the supervisor retries it
 	cfMu          sync.Mutex
 	lastTunnelCfg string
+	auth          *auth.Server // sign-in; nil until Run
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -166,6 +168,7 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		return err
 	}
 	var routes []caddy.Route
+	sites := map[string]auth.Site{}
 	for _, a := range apps {
 		r := caddy.Route{App: a.Name, AccessLog: d.Store.Path("apps", a.Name, "logs", "access.log")}
 		if !a.Private && !cfg.NoTunnel && cfg.Domain != "" {
@@ -186,7 +189,25 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if a.Auth != nil {
 			r.AuthUser, r.AuthHash = a.Auth.User, a.Auth.Hash
 		}
+		if a.Access != nil {
+			r.SignIn, r.Private = true, !a.Access.AllPublic()
+			for _, h := range r.PublicHosts {
+				sites[h] = auth.Site{App: a.Name, BaseURL: "https://" + h, Access: a.Access}
+			}
+			for _, h := range r.LANHosts {
+				base := "https://" + h
+				if strings.HasSuffix(h, ".local") {
+					base += portSuffix(cfg.CaddyHTTPS, "443")
+				}
+				sites[h] = auth.Site{App: a.Name, BaseURL: base, Access: a.Access}
+			}
+		}
 		routes = append(routes, r)
+	}
+	authHost := ""
+	if d.auth != nil {
+		d.auth.SetSites(sites)
+		authHost = d.signInHost(cfg)
 	}
 	conf := caddy.Build(caddy.Options{
 		Admin:       cfg.CaddyAdmin,
@@ -195,6 +216,9 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		LANHTTP:     cfg.CaddyLANHTTP,
 		DNSAddr:     cfg.DNSAddr,
 		SRVDomain:   SRVDomain,
+		AuthAddr:    cfg.AuthAddr,
+		AuthHost:    authHost,
+		IDHeaders:   auth.Headers,
 		StorageDir:  d.Store.Path("caddy"),
 		Routes:      routes,
 	})
@@ -298,6 +322,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	go d.serveDNS(dnsConn)
 	defer dnsConn.Close()
+	authSrv, err := d.startAuth(cfg)
+	if err != nil {
+		ln.Close()
+		hookLn.Close()
+		return err
+	}
+	defer authSrv.Close()
 	slog.Info("berthd started", "version", Version, "home", d.Store.Root, "socket", sock, "webhooks", cfg.WebhookAddr)
 
 	go func() {

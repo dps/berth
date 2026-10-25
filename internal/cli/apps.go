@@ -36,7 +36,11 @@ func cmdCreate() *cobra.Command {
 				return err
 			}
 			if !jsonOut && len(res.URLs) > 0 {
-				fmt.Printf("\n%s is live at %s\n", p.Name, res.URLs[0])
+				if p.NoDeploy {
+					fmt.Printf("\n%s will be at %s after `berth deploy %s`\n", p.Name, res.URLs[0], p.Name)
+				} else {
+					fmt.Printf("\n%s is live at %s\n", p.Name, res.URLs[0])
+				}
 			}
 			return nil
 		},
