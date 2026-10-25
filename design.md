@@ -1,0 +1,349 @@
+# Berth: a Dokku for Mac minis — design doc
+
+Oct 24, 2026 · @David Singleton
+
+## Summary
+
+Berth is a single-binary PaaS for Apple Silicon Mac minis: `git push` to GitHub and your app is live on the internet at `app.yourdomain.com` in under a minute, with a Postgres database one command away. It composes four things that already exist and are each very good at one job — Apple's `container` CLI (one micro-VM per app), Caddy (routing), Cloudflare Tunnel (public ingress with no open ports), and GitHub webhooks (deploy trigger) — behind a Dokku-shaped CLI. The whole system lives in `~/.berth`, needs no `sudo` after install, no YAML, and no Docker Desktop.
+
+Target: macOS 26, Apple Silicon. Language: Go (one static binary, same toolchain Caddy and cloudflared use). License: MIT. Working name *Berth* (where a ship ties up); rename freely.
+
+```bash
+brew install berth && berth init --domain example.com   # once, ~3 minutes
+berth create myapp --repo me/myapp                       # per app
+git push                                                  # every deploy
+```
+
+## Goals and non-goals
+
+Built for one person with one Mac mini on a home connection, hosting 1–30 small apps that are mostly written by coding agents. That user wants Heroku's loop (push, it's live) without Heroku's bill, and never wants to think about nginx, certificates, port forwarding or `docker-compose.yml`.
+
+**Goals**
+
+- Push-to-deploy from GitHub with zero config beyond the repo name.
+- One command gives an app a public HTTPS hostname; no ports opened on the router.
+- Postgres (and later Redis) as a first-class, linkable service with data on the Mac's own disk and in Time Machine.
+- Dockerfile-first builds, with generated Dockerfiles for the common stacks so most repos need none.
+- Zero-downtime deploys, instant rollback, readable logs — the Dokku feature set people actually use.
+- Survives reboots and crashes unattended; the Mac can sit in a closet.
+- Small enough that a coding agent can build it from this doc and a human can read the whole codebase in an afternoon.
+
+**Non-goals**
+
+- Multiple hosts, HA, autoscaling. One Mac. Outgrow it → move to Fly/Render; your Dockerfile comes with you.
+- A web UI (v1). The CLI and `berth status` are the UI; a read-only status page over the tunnel is a maybe.
+- Buildpack compatibility, Procfile multi-process types (v1 runs one `web` process per app; `worker` is v2).
+- Intel Macs or macOS < 26 — Apple's `container` is Apple Silicon only and effectively requires macOS 26.
+- Replacing `container`, Caddy or cloudflared. Berth orchestrates them; it does not reimplement them.
+
+## The developer experience
+
+The whole product is three moments. Everything in later sections exists to make these three short.
+
+**1. Install (once, \~3 minutes)**
+
+```bash
+brew install berth
+berth init --domain example.com
+```
+
+`berth init` walks through: check Apple Silicon + macOS 26 + `container` installed (offers `brew install --cask container` if not); `container system start`; install Caddy and cloudflared via Homebrew if missing; open a browser for `cloudflared tunnel login` (Cloudflare account with `example.com` on it); create a tunnel named `berth`, route `*.example.com` to it, and ask for an optional scoped API token so custom domains can be added later without restarting the tunnel; create a GitHub token (device-flow login) for cloning private repos and registering webhooks; install `berthd` as a launchd agent; print the health summary. Flags `--no-tunnel` (LAN only) and `--github-token`/`--cf-token` for non-interactive setup.
+
+**2. First deploy (per app, \~1 minute)**
+
+```bash
+berth create myapp --repo me/myapp
+# → registered webhook on github.com/me/myapp
+# → https://myapp.example.com (DNS live in ~30s)
+# → building main@a1b2c3d ... ✓ running
+```
+
+If the repo has no Dockerfile, Berth detects the stack (Node/Bun, Python, Go, Rust, static) and uses a built-in template; `berth dockerfile myapp` prints it so you can commit and edit it. Need a database?
+
+```bash
+berth pg:create mydb
+berth pg:link mydb myapp     # sets DATABASE_URL, redeploys
+```
+
+**3. Daily loop**
+
+```bash
+git push                      # webhook → build → zero-downtime swap, ~20–60 s
+berth logs myapp -f
+berth config:set myapp OPENAI_API_KEY=sk-...
+berth rollback myapp         # previous release back in ~2 s
+berth status                  # every app, release, uptime, URL, disk
+```
+
+Design rules that keep this tight: every command finishes with the URL or the thing you need next; no command needs `sudo` after `init`; no state outside `~/.berth` and `~/Library/LaunchAgents`; every Berth concept maps 1:1 to a Dokku concept so the muscle memory transfers.
+
+## Architecture
+
+Six components, all on the Mac, all talking over localhost. Berth owns two of them (`berth` CLI, `berthd` daemon) and configures the other four.
+
+&#91;embedded content: Berth on one Mac mini · 6 components, 2 flows\]
+
+Two flows share the tunnel: a push reaches GitHub, whose webhook travels through Cloudflare to `berthd`; a visitor's request travels the same tunnel to Caddy, which proxies to the app's published port. `berthd` builds and runs containers with the `container` CLI and tells Caddy about new upstreams over its admin API.
+
+| Component | Role | Owned by | Runs as |
+| --- | --- | --- | --- |
+| `berth` | CLI. Talks to `berthd` over a unix socket at `~/.berth/berthd.sock`; also works offline for read-only commands by reading state files. | Berth (Go) | invoked by user |
+| `berthd` | Daemon. Webhook receiver (`127.0.0.1:7777`), git clone/fetch, build, release, health checks, Caddy reconfiguration, crash-restart loop, GC. The only writer of `~/.berth`. | Berth (Go) | launchd LaunchAgent |
+| `container` | Apple's runtime. One micro-VM per app or service; images, named volumes, the `berth` virtual network with built-in DNS. | Apple | `container system start`, via launchd |
+| Caddy | Reverse proxy on `127.0.0.1:80` for the tunnel and `0.0.0.0:443` for LAN (internal CA). One route per app hostname, hot-swapped via `/config` admin API on `127.0.0.1:2019`. | Caddy | launchd LaunchAgent |
+| cloudflared | Outbound tunnel. Ingress: `hooks.<domain>` → berthd, `*.<domain>` → Caddy :80, catch-all 404. | Cloudflare | launchd LaunchAgent |
+| Postgres | Official `postgres:17` image on the `berth` network, data in a named volume mirrored to `~/.berth/data/pg/<name>`. | Berth-managed container | `container run` |
+
+Why a daemon rather than a Dokku-style git hook: GitHub is the source of truth for vibe-coded repos (the agent pushes there), the Mac is behind NAT, and a long-lived process is what you need anyway for health checks and restarts. `berthd` is a single Go process, \~3k lines, no database — state is JSON files and the filesystem.
+
+## Apps, builds and releases
+
+An **app** is a name, a GitHub repo, a branch (default `main`), an env map, and a list of releases. A **release** is an immutable image tagged `berth/<app>:<n>` plus the env snapshot it was started with; `current` points at one of them. Deploy = make a new release, start it, swap traffic, stop the old one. Rollback = point `current` at an older release and do the same swap.
+
+**Build pipeline** (`berthd`, one deploy at a time per app, concurrent across apps):
+
+1. Fetch: `git fetch` into the bare mirror `~/.berth/apps/<app>/repo.git`, check out the commit into a fresh worktree under `~/.berth/apps/<app>/build/<sha>/`.
+2. Choose a Dockerfile: the repo's own if present (path overridable with `berth config:set myapp BERTH_DOCKERFILE=deploy/Dockerfile`), else a template picked by detection order: `bun.lockb` → Bun; `package.json` → Node (respects `engines.node`, runs `build` script if present, starts with `npm start`); `pyproject.toml`/`requirements.txt` → Python (uv, `uvicorn`/`gunicorn` if found, else `python main.py`); `go.mod` → Go multi-stage; `Cargo.toml` → Rust; `index.html` with no manifest → static (Caddy file server image). Detection is a 150-line function; every template is a plain file under `templates/` so users and agents can read and copy them.
+3. Build: `container build -t berth/<app>:<n> -f <Dockerfile> <worktree>` with a per-app build cache. Build logs stream to the CLI and to `~/.berth/apps/<app>/logs/build-<n>.log`.
+4. Start: `container run -d --name berth-<app>-<n> --network berth -p 127.0.0.1:<port>:<PORT> --env-file <snapshot> --cpus/--memory from config --init berth/<app>:<n>`. `PORT` is injected (default 8080); the host port comes from a pool (8001–8999) recorded per release, so two releases of one app can run side by side.
+5. Health: poll `http://127.0.0.1:<port><healthcheck path>` (default `/`, any 2xx–4xx counts as up, configurable with `BERTH_HEALTHCHECK` and `BERTH_HEALTH_TIMEOUT`, default 60 s). On failure: stop the new container, keep the old one, mark the release failed, exit non-zero with the last 50 log lines.
+6. Swap: PATCH Caddy's route for `<app>.<domain>` to the new upstream via the admin API (atomic, no dropped connections), wait `BERTH_DRAIN` seconds (default 5), stop the previous container.
+7. GC: keep the last 5 releases' images and containers (configurable), delete older ones and the worktree.
+
+**Contract with the app**, deliberately identical to Heroku/Dokku so agent-written code works unchanged: listen on `$PORT` on `0.0.0.0`; read config from env; write only to `/tmp` or a mounted volume; log to stdout. `berth create` prints these four lines.
+
+**Process model, v1**: one container, one process, per app. Workers, cron and multiple process types are v2 (`Procfile` support, `berth ps:scale`), kept out so v1 ships. A second "app" pointing at the same repo with a different start command covers most worker needs meanwhile.
+
+## Deploy triggers
+
+GitHub webhook is the primary trigger; polling is the no-config fallback; `git push berth` and `berth deploy` exist for people who want Dokku's exact feel or are offline. All four end in the same `berthd` deploy job.
+
+| Trigger | How it reaches berthd | Latency | Setup |
+| --- | --- | --- | --- |
+| GitHub webhook | `POST https://hooks.<domain>/github/<app>` through the tunnel; HMAC-SHA256 checked against a per-app secret | \~2 s | automatic: `berth create --repo` registers it with the GitHub token from `init` |
+| Polling | berthd asks the GitHub API for the branch head every 60 s (ETag, so nearly free) | ≤ 60 s | automatic when the token lacks webhook rights, or `--no-webhook`; also the safety net if a webhook is missed |
+| `git push berth main` | a `berth` git remote whose URL is `ssh://<mac>/~/.berth/apps/<app>/repo.git`; a `post-receive` hook pokes berthd | \~1 s | `berth git:remote myapp` adds the remote; needs SSH to the Mac (LAN or Tailscale) |
+| `berth deploy myapp [--ref sha]` | CLI → unix socket | immediate | none; also redeploys with no code change after `config:set` |
+
+**Webhook details**: `berth create` calls `POST /repos/{owner}/{repo}/hooks` with events `push`, a generated secret stored in the app's state file, and content type JSON. berthd ignores pushes to other branches, tag pushes, and deletes. It records the delivery id so a GitHub redelivery is idempotent. `berth create --branch staging` plus a second app name gives a staging environment from the same repo.
+
+**Private repos**: the GitHub token from `init` (device flow, scopes `repo`, `admin:repo_hook`) is used for `git fetch` over HTTPS via a credential helper. Users who prefer SSH deploy keys can `berth app:set-key myapp` and berthd will generate a key and print it for adding as a deploy key.
+
+**Monorepos**: `berth create api --repo me/mono --path services/api` builds from a subdirectory and only deploys when a push touches that path.
+
+## Networking
+
+Every app gets `<app>.<domain>` on the public internet and `<app>.<mac-hostname>.local` on the LAN, with no router changes and no certificates to manage. Three layers:
+
+**Cloudflare Tunnel (public ingress).** `berth init` runs `cloudflared tunnel login`, `cloudflared tunnel create berth`, and `cloudflared tunnel route dns berth '*.<domain>'` (one wildcard CNAME, so new apps need no DNS step). berthd writes `~/.berth/cloudflared.yml`:
+
+```yaml
+tunnel: <id>
+credentials-file: ~/.berth/cloudflared/<id>.json
+ingress:
+  - hostname: hooks.<domain>
+    service: http://127.0.0.1:7777
+  - hostname: "*.<domain>"
+    service: http://127.0.0.1:80
+  - service: http_status:404
+```
+
+TLS terminates at Cloudflare's edge; the tunnel is an outbound QUIC connection, so the Mac listens on nothing publicly. Cloudflare's free plan limits are generous for this use (100 MB uploads, no bandwidth cap for HTML; video/large-file hosting is a non-goal).
+
+**New apps never touch the tunnel.** The wildcard is one DNS record and one ingress rule, so `myapp.<domain>` already resolves to the tunnel and already lands on Caddy the moment the app exists; `berth create` adds only the Caddy route. cloudflared never learns app names.
+
+**Custom domains are the only tunnel change** (`berth domains:add myapp www.other.com`), and Berth uses Cloudflare's *remotely managed* tunnel configuration for them: berthd calls `PUT /accounts/{account}/cfd_tunnel/{tunnel}/configurations` with the new ingress list and `POST /zones/{zone}/dns_records` for the CNAME; cloudflared picks up the new ingress live, with no restart and no dropped connections. This needs a scoped API token (`Cloudflare Tunnel: Edit`, `DNS: Edit`), which `berth init` asks for after the `cloudflared tunnel login` step, linking straight to the token page with the right template. If the user declines the token, Berth falls back to a locally managed config: it rewrites `~/.berth/cloudflared.yml` and restarts cloudflared through launchd, which drops in-flight connections for a second or two — printed as a warning on every `domains:add`. For a zone on another account, Berth prints the CNAME to set manually.
+
+**Caddy (routing).** One Caddy, configured entirely through its admin API so berthd never rewrites a Caddyfile. Each app is a route: `host == <app>.<domain> or <app>.<hostname>.local → reverse_proxy 127.0.0.1:<port>`. Deploys swap the upstream in one PATCH. Caddy also provides: gzip/zstd, HTTP→HTTPS on LAN, access logs per app (`~/.berth/apps/<app>/logs/access.log`, JSON), a `berth.<domain>` status route (v2), and basic auth for an app with `berth auth:set myapp user:pass`. Caddy's internal CA issues LAN certificates; `berth init` offers to trust the root in the login keychain so Safari on the LAN shows a lock.
+
+**`container` network (app ↔ service).** All Berth containers join a user-defined network `berth` (`container network create berth`), where Apple's built-in DNS resolves container names. berthd sets the DNS domain to `berth.internal`, so a linked Postgres is reachable from an app as `pg-mydb.berth.internal:5432` and never touches a host port. Apps publish their web port only to `127.0.0.1`; nothing inside a container is reachable from the LAN except through Caddy.
+
+**No-tunnel mode** (`berth init --no-tunnel`): LAN hostnames only, or pair with Tailscale (`berth init --tailscale` runs `tailscale serve` to Caddy) for private-but-remote access. Both are two-line variations on the same Caddy config.
+
+## Storage
+
+Postgres is the built-in service; everything else is a bind-mounted folder. Both keep data on the Mac's own disk under `~/.berth/data`, so Time Machine (or any backup the user already has) covers it with no extra setup.
+
+**Postgres service** (`berth pg:*`, modelled on dokku-postgres):
+
+```bash
+berth pg:create mydb            # postgres:17 on the berth network, named volume berth-pg-mydb
+berth pg:link mydb myapp        # sets DATABASE_URL=postgres://mydb:<pw>@pg-mydb.berth.internal:5432/mydb, redeploys
+berth pg:unlink mydb myapp
+berth pg:psql mydb              # interactive psql via container exec
+berth pg:backup mydb            # pg_dump -Fc → ~/.berth/backups/pg/mydb/<ts>.dump
+berth pg:restore mydb <file>
+berth pg:expose mydb 15432      # optional: publish on 127.0.0.1 for TablePlus etc.
+berth pg:destroy mydb
+```
+
+Implementation: one `container run -d --name pg-mydb --network berth -v berth-pg-mydb:/var/lib/postgresql/data -e POSTGRES_PASSWORD=<generated> postgres:17`, 512 MB memory by default (`--memory` configurable). Data lives in a `container` named volume; `berth pg:create` places it at `~/.berth/data/pg/mydb` so it is a normal folder on APFS. Nightly `pg_dump` is on by default (03:00 local, keep 14) because a dump survives Postgres major-version upgrades and a raw data directory does not. `berth pg:upgrade mydb --to 18` = dump, new container, restore, re-link. Multiple apps can link to one database; each link gets its own role and password.
+
+**Redis** follows the same shape (`berth redis:*`, `redis:7`, `REDIS_URL`) and is a \~200-line copy of the Postgres plugin; ship it in v1 if cheap, otherwise v1.1.
+
+**Volumes for apps** (SQLite, uploads, caches):
+
+```bash
+berth storage:mount myapp /data   # → ~/.berth/data/apps/myapp/data, bind-mounted read-write
+```
+
+Stored in app state and added as `-v` on every release, so it survives deploys and rollbacks. Agents love SQLite; this makes `DATABASE_PATH=/data/app.db` just work.
+
+**Backups and restore**: `berth backup` tars `~/.berth` minus images and build caches (state, env, pg dumps, app volumes) into one archive; `berth restore <archive>` on a fresh Mac re-creates apps, services and links and redeploys from GitHub. This is also the migration story between machines.
+
+**Disk**: `berth status` shows disk used by images, volumes and backups; `berth gc` prunes unreferenced images, old releases past the keep count, and dumps past retention. berthd refuses to deploy below 2 GB free rather than filling the boot volume.
+
+## Config, secrets and the on-disk layout
+
+All state is plain files under `~/.berth`, readable with `cat`, backed up with `tar`, and simple enough that a coding agent can debug Berth by looking at the directory.
+
+```
+~/.berth/
+  config.json            # domain, tunnel id, github user, ports, defaults
+  berthd.sock            # CLI ↔ daemon
+  caddy.json             # last-applied Caddy config (rebuilt from apps/*/app.json on start)
+  cloudflared.yml
+  secrets/               # mode 0700
+    github.token
+    cloudflared/<tunnel>.json
+  apps/<app>/
+    app.json             # repo, branch, path, dockerfile, port, healthcheck, mounts, links, hook secret
+    env                  # KEY=value, mode 0600; the live config
+    releases/<n>.json    # sha, image, env snapshot, host port, status, timestamps
+    current              # → release number
+    repo.git/            # bare mirror
+    build/<sha>/         # worktree, deleted after build
+    logs/                # build-<n>.log, app.log (rotated), access.log
+  services/pg/<name>/service.json
+  data/pg/<name>/        # Postgres data directory (named volume location)
+  data/apps/<app>/<mount>/
+  backups/pg/<name>/*.dump
+```
+
+**Config vars**: `berth config:set myapp KEY=val ...` writes `env` and redeploys (`--no-restart` to defer); `config:get`, `config:unset`, `config:show` (masks values ending in `_KEY`, `_SECRET`, `_TOKEN`, `PASSWORD` unless `--reveal`), `config:import .env`. Berth-controlled vars are namespaced `BERTH_*` and documented in one table: `BERTH_DOCKERFILE`, `BERTH_HEALTHCHECK`, `BERTH_HEALTH_TIMEOUT`, `BERTH_DRAIN`, `BERTH_MEMORY`, `BERTH_CPUS`, `BERTH_KEEP_RELEASES`. Everything else is passed to the container untouched.
+
+**Secrets at rest**: v1 relies on the user's login keychain for nothing and on filesystem permissions (0600/0700) for everything, same as Dokku and `~/.ssh`. FileVault, which Macs ship with on, covers the disk. A `--keychain` option that stores `env` in the macOS Keychain is a v2 consideration; it would make headless reboot harder, which is the wrong trade for a closet Mac.
+
+**Reconciliation**: `app.json` and `env` are the source of truth. On every start berthd rebuilds the Caddy config, the cloudflared ingress and the running-container set from them, so a hand edit followed by `berth restart` is a supported path and a corrupted `caddy.json` is never fatal.
+
+## Operations
+
+The Mac should run for months in a closet with nobody logged in at the screen. Five things make that true:
+
+1. **launchd**. `berth init` installs three LaunchAgents in `~/Library/LaunchAgents`: `dev.berth.berthd`, `dev.berth.caddy`, `dev.berth.cloudflared`, all `KeepAlive` + `RunAtLoad`. Apple's `container` service is per-user, so Berth runs in the user session, not as a system daemon; `berthd` runs `container system start` on launch and retries until it succeeds. `berth init` also enables auto-login for the current user (prints the System Settings path; cannot be scripted without `sudo`) and sets `sudo pmset -a sleep 0 disksleep 0 womp 1 autorestart 1` once, with consent. Those two are the only `sudo` touches in the product.
+2. **Crash recovery**. berthd watches `container list` every 10 s. A container that exits is restarted with exponential backoff (1 s → 60 s cap, reset after 10 min healthy); after 10 straight failures the app is marked `crashed` in `berth status` and left alone until the next deploy or `berth restart`. On berthd start, every app with a `current` release that is not running gets started, oldest first, and Caddy is rebuilt.
+3. **Logs**. `container logs` is the source; berthd tails each running container into `~/.berth/apps/<app>/logs/app.log` (rotated at 50 MB, keep 5), so logs outlive the container. `berth logs myapp [-f] [-n 200] [--since 1h]`, `berth logs --all` multiplexes with app prefixes. Build logs are separate. Caddy access logs are JSON per app.
+4. **Visibility**. `berth status` is one screen: each app with release, sha, uptime, memory, host port, URL, last deploy result; each service; tunnel connected?; Caddy up?; disk free. `berth doctor` checks every assumption (macOS version, `container` running, launchd agents loaded, tunnel healthy, DNS resolves, Caddy admin reachable, free disk, sleep settings) and prints a fix for each failure. `berth events` tails berthd's structured event log (deploys, restarts, webhook deliveries).
+5. **Notifications** (v1.1). A webhook URL in `config.json` (`berth notify:set https://...`) receives JSON on deploy success/failure and crash-loop; works with Slack, Discord, ntfy. A macOS notification on the Mac itself is nearly free to add but nobody is looking at that screen.
+
+**Updates**: `brew upgrade berth` replaces the binaries; berthd notices its own binary changed and restarts itself gracefully (finishes the in-flight deploy first). Caddy and cloudflared are updated by Homebrew independently; berthd pins minimum versions and `berth doctor` flags mismatches. Apple's `container` updates via its installer; Berth tracks a tested-against version in `config.json`.
+
+**Resource limits**: default per app 512 MB / 1 CPU, settable with `BERTH_MEMORY`/`BERTH_CPUS`. A 16 GB Mac mini runs \~20 small apps plus Postgres comfortably; `berth status` warns when committed memory exceeds 80% of physical.
+
+## Security model
+
+The attack surface is two HTTP endpoints behind Cloudflare, nothing else. The threat model is "vibe-coded app with a bug" more than "targeted attacker", and the design leans on isolation the user gets for free.
+
+- **No inbound ports.** The tunnel is outbound; the router stays closed. Caddy's LAN listener on 443 is the only thing on the local network, and it only proxies to apps.
+- **Webhook endpoint**: HMAC-SHA256 over the raw body with a per-app 32-byte secret; constant-time compare; delivery-id dedupe; 1 MB body cap; rate limited; only reachable as `hooks.<domain>` through the tunnel. Optionally gate it with Cloudflare Access (`berth init --cf-access`) so only GitHub's published IP ranges reach it.
+- **berthd control socket** is a unix socket, mode 0600, owned by the user; no TCP admin interface. Caddy's admin API binds `127.0.0.1` only.
+- **Per-app isolation** is Apple's: each app is its own micro-VM with its own kernel, so a container escape in one app does not reach another app, the Postgres VM or macOS. This is materially stronger than Dokku on a shared Docker daemon and is the best argument for `container` over OrbStack.
+- **Containers see only what they are given**: their env snapshot, their mounts, the `berth` network. No access to the user's home directory, the GitHub token, or other apps' env. Builds run in `container build`'s builder VM, not on the host.
+- **Least privilege for tokens**: the GitHub token is scoped to `repo` + `admin:repo_hook`; the Cloudflare credential is a tunnel credential, not an account API key (DNS routing at `init` uses a one-time `cloudflared tunnel route dns`; custom zones later need a scoped API token the user pastes).
+- **Secrets**: never logged, masked in `config:show`, never in build args unless the user opts in with `berth config:set --build-arg`; env snapshots are 0600 files.
+- **Supply chain**: images are pulled from the registry the Dockerfile names; Berth templates pin major tags (`node:22-slim`, `postgres:17`). `berth doctor --images` lists images with available updates.
+- **Public by default is a choice**: `berth create --private` creates the app with no tunnel ingress (LAN/Tailscale only); `berth auth:set` adds basic auth in Caddy; both are one flag because the hobbyist default should be safe to flip either way.
+
+## CLI reference
+
+Dokku's `noun:verb` style, with the handful of commands people type daily at the top level. Every command accepts `--json` for agents and scripts. Column 3 is the Dokku equivalent, for muscle memory.
+
+| Command | Does | Dokku |
+| --- | --- | --- |
+| `berth init --domain d [--no-tunnel\|--tailscale] [--cf-access]` | one-time setup of tunnel, Caddy, launchd, GitHub login | bootstrap.sh |
+| `berth create <app> --repo owner/name [--branch b] [--path p] [--private] [--no-webhook]` | register app, webhook, hostname; first deploy | `apps:create` + git remote |
+| `berth deploy <app> [--ref sha]` | build + release now | `git push dokku` |
+| `berth rollback <app> [n]` | swap to previous (or release n) | `ps:rebuild` / manual |
+| `berth logs <app> [-f] [-n N] [--since 1h] [--build [n]]` | app, build, or access logs | `logs` |
+| `berth status [app]` | everything at a glance | `ps:report` |
+| `berth restart\|stop\|start <app>` | lifecycle | `ps:restart` etc. |
+| `berth destroy <app> [--keep-data]` | remove app, hostname, webhook, images | `apps:destroy` |
+| `berth config:set\|get\|unset\|show\|import <app> ...` | env vars | `config:*` |
+| `berth domains:add\|remove\|list <app> <host>` | extra hostnames via tunnel ingress | `domains:*` |
+| `berth auth:set\|unset <app> user:pass` | basic auth in Caddy | http-auth plugin |
+| `berth storage:mount\|unmount\|list <app> <path>` | persistent folders | `storage:*` |
+| `berth pg:create\|link\|unlink\|psql\|backup\|restore\|expose\|upgrade\|destroy\|list` | Postgres service | dokku-postgres |
+| `berth redis:*` | Redis service (same verbs) | dokku-redis |
+| `berth releases <app>` | list releases with sha, status, time | `ps:report` |
+| `berth run <app> <cmd>` | one-off command in a fresh container with the app's env (migrations) | `run` |
+| `berth exec <app> <cmd>` | shell into the running container | `enter` |
+| `berth dockerfile <app>` | print the template Berth would use | — |
+| `berth git:remote <app>` | add a `berth` SSH remote for push-to-deploy | built in |
+| `berth doctor` / `berth events` / `berth gc` / `berth backup` / `berth restore` | ops | — |
+| `berth notify:set <url>` | deploy/crash notifications (v1.1) | — |
+
+Output conventions: success ends with the URL or the next command; errors are one line plus `berth doctor` or `berth logs` as the pointer; long operations stream (`building ... ✓ 23 s`). Shell completions for zsh/fish ship with the brew formula.
+
+## Implementation plan for a coding agent
+
+Go 1.23+, one module, two binaries from one `cmd/`. Shell out to `container`, `git`, `cloudflared`; talk to Caddy over HTTP. No CGO, no database, no framework beyond `cobra` for the CLI. Target \~6k lines including tests. Each milestone ends with a demo the agent can run end-to-end on a real Mac mini; do them in order and do not start the next until the demo passes.
+
+**Repo layout**
+
+```
+berth/
+  cmd/berth/main.go          # CLI (cobra); every command = one file in internal/cli
+  cmd/berthd/main.go         # daemon entry
+  internal/
+    state/      # app.json, releases, env: load/save, atomic writes, locking
+    runtime/    # wrapper over `container` CLI: build, run, stop, logs, list, volumes, network (interface + fake for tests)
+    caddy/      # admin API client: route upsert/delete, rebuild from state
+    tunnel/     # cloudflared config writer + lifecycle
+    github/     # device-flow login, hooks API, branch-head polling, HMAC verify
+    deploy/     # the pipeline: fetch → dockerfile → build → run → health → swap → gc
+    detect/     # stack detection + templates/*.Dockerfile (embed.FS)
+    services/pg # Postgres plugin; services/redis copies it
+    daemon/     # unix-socket RPC, webhook server, supervisor loop, event log
+    launchd/    # plist generation + load/unload
+    doctor/
+  templates/    # Dockerfiles, plists, Caddy route JSON
+  docs/         # this doc, plus per-command docs generated from cobra
+  Formula/berth.rb
+```
+
+**Milestones**
+
+1. **Skeleton + runtime wrapper** — `berth doctor` passes on a clean Mac; `runtime` can build a hello-world Dockerfile and run it on a port; fake runtime for CI on Linux.
+2. **Deploy pipeline, local only** — `berth create hello --repo ... --no-webhook` then `berth deploy hello` serves on `127.0.0.1:<port>`; releases, rollback, logs, config:set work. Demo: deploy, change an env var, rollback.
+3. **Caddy** — routes per app on `.local` with internal TLS; zero-downtime swap verified by a `hey`/`oha` run during a deploy showing 0 failed requests.
+4. **Tunnel + DNS** — `berth init --domain` end to end; `https://hello.<domain>` works from a phone on cellular.
+5. **GitHub** — device-flow login, webhook registration, HMAC verify, polling fallback; demo: `git push` → live in under 60 s, plus a redelivery is a no-op.
+6. **Postgres** — `pg:create/link/psql/backup/restore`; demo: a Node app with Prisma migrates and serves from it; nightly dump fires.
+7. **launchd + supervisor** — reboot the Mac; everything comes back without a login prompt touched; kill an app's process; it restarts.
+8. **Polish** — storage:mount, domains:add, auth:set, gc, backup/restore, `--json` everywhere, completions, brew formula, README with a 90-second GIF.
+
+**Acceptance tests** (checked, not aspirational): the three-command install on a fresh macOS 26 account completes in < 5 min with no `sudo` beyond the two consented commands; push-to-live p50 < 45 s for a Node app with a warm cache; zero failed requests across 20 consecutive deploys under load; power-cycle recovery < 2 min with all apps and Postgres healthy; `berth restore` on a second Mac reproduces every app and database; `go test ./...` runs on Linux with the fake runtime and covers state, deploy ordering, HMAC, detection and Caddy config generation.
+
+**Guidance for the agent**: read Apple's `container` docs (`github.com/apple/container/docs`) for the exact flags before writing `runtime/`; prefer one shell-out with `--format json` over parsing text; make every write to `~/.berth` atomic (write temp, rename); log every external command at debug level with its duration; keep each CLI command under 150 lines; when in doubt, copy the Dokku behaviour and name.
+
+## Open questions and known limitations
+
+Things to settle in milestone 1 by trying them, and limits worth stating in the README.
+
+- [ ] **Volume semantics in `container`**: confirm a named volume can be pinned to a path under `~/.berth/data` (or whether bind mounts of a host folder are the right primitive for Postgres data). Decides whether Time Machine sees it directly.
+- [ ] **Build cache**: does `container build` keep a persistent layer cache across builds, and where? If not, the 45 s push-to-live target needs a registry-backed cache or `--cache-from`.
+- [ ] **DNS domain per network**: verify `container system property set dns.domain` (or the per-run `--dns-domain` flag) gives `pg-mydb.berth.internal` resolution from app containers on macOS 26 without `sudo` at runtime.
+- [ ] **Idle memory**: micro-VMs free memory when idle per Apple's description; measure the real floor per app (target ≤ 60 MB) since this sets the apps-per-Mac number.
+- [ ] **launchd + `container system`**: confirm the service starts cleanly at login with no GUI session interaction, and whether auto-login is strictly required or a LaunchAgent in the user context is enough after FileVault unlock.
+- [ ] **Rosetta**: should `berth` pass `--rosetta`-style flags for amd64-only images automatically, or just document "use arm64 images"? Default: detect `linux/amd64`-only manifests and warn.
+- [ ] **Name**: *Berth* vs something else; check npm/brew/GitHub availability.
+
+**Known limitations, v1**
+
+- Apple Silicon + macOS 26 only; no Intel, no Linux. (The abstraction in `runtime/` would admit a Docker backend later, but that is not a goal.)
+- One process type per app; no cron scheduler; no multi-host.
+- Cloudflare account required for public URLs (free tier is fine). Tailscale/LAN modes exist for people who do not want Cloudflare.
+- A home connection's upload speed is the ceiling; Berth is for apps, not for serving large media.
+- Postgres and Redis only; other services (Mongo, MySQL, MinIO) are either a Dockerfile in your own app or a v2 plugin API, deliberately deferred until two people ask.
+
+**Sources**: [apple/container](https://github.com/apple/container) · [container CLI `run` reference](https://mintlify.com/apple/container/cli/run) · [container networking notes](https://instagit.com/apple/container/how-to-network-multiple-containers/) · [Dokku docs](https://dokku.com/docs/) · [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) · [Caddy admin API](https://caddyserver.com/docs/api)
