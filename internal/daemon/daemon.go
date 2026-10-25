@@ -45,6 +45,7 @@ type Daemon struct {
 	// Intervals (tests shorten them).
 	SuperviseEvery time.Duration
 	PollEvery      time.Duration
+	CrashBackoff   func(failures int) time.Duration
 
 	started time.Time
 	exe     string
@@ -56,6 +57,7 @@ type Daemon struct {
 	queued        map[string]bool
 	hookHits      map[string][]time.Time // rate limiting per app
 	mdns          *mdnsRegistry
+	net           netState
 	restoring     atomic.Bool // pauses the supervisor while `berth restore` rebuilds state
 	tunnelRetry   atomic.Bool // a tunnel config update failed; the supervisor retries it
 	cfMu          sync.Mutex
@@ -74,6 +76,7 @@ func New(store *state.Store, rt runtime.Runtime) *Daemon {
 		CloudflareAPI:  tunnel.NewAPI,
 		SuperviseEvery: 10 * time.Second,
 		PollEvery:      60 * time.Second,
+		CrashBackoff:   backoff,
 		crash:          map[string]*crashState{},
 		tails:          map[string]context.CancelFunc{},
 		queued:         map[string]bool{},
@@ -177,7 +180,9 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		// The upstreams depend only on the app's slots, never on which
 		// container is running, so deploys, restarts and crash recovery
 		// leave the Caddy config untouched.
-		if rel := d.Store.CurrentRelease(a.Name); rel != nil && !a.Stopped {
+		// A crashed release (given up on) answers 503 at once instead of
+		// Caddy retrying dead slots for 5 s.
+		if rel := d.Store.CurrentRelease(a.Name); rel != nil && !a.Stopped && rel.Status != state.StatusCrashed {
 			ports := a.Slots
 			if len(ports) == 0 {
 				ports = []int{rel.HostPort}

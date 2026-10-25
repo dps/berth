@@ -90,6 +90,7 @@ type Config struct {
 	PGBackupHour    int    `json:"pg_backup_hour"`
 	PGBackupKeep    int    `json:"pg_backup_keep"`
 	Launchd         bool   `json:"launchd"`
+	AutoHealNetwork *bool  `json:"auto_heal_network,omitempty"` // restart the container system if containers lose outbound network (default on)
 	ContainerTested string `json:"container_tested"`
 }
 
@@ -127,6 +128,10 @@ func LocalHostName() string {
 	host, _ := os.Hostname()
 	return strings.ToLower(strings.TrimSuffix(strings.Split(host, ".")[0], ".local"))
 }
+
+// HealNetwork reports whether berthd may restart the container system when
+// containers lose outbound network.
+func (c *Config) HealNetwork() bool { return c.AutoHealNetwork == nil || *c.AutoHealNetwork }
 
 var ErrNotInitialized = errors.New("berth is not initialized (run `berth init`)")
 

@@ -22,6 +22,7 @@ type Fake struct {
 	VolumeSet  map[string]bool
 	Calls      []string
 	BuildHook  func(o BuildOpts) (behaviour string, err error)
+	RunWithErr error // returned by RunWith (e.g. a failing network probe)
 }
 
 type fakeContainer struct {
@@ -54,7 +55,17 @@ func (f *Fake) CallLog(prefix string) []string {
 	return out
 }
 
-func (f *Fake) SystemStart(ctx context.Context) error       { return nil }
+func (f *Fake) SystemStart(ctx context.Context) error { return nil }
+func (f *Fake) SystemStop(ctx context.Context) error {
+	f.record("system stop")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.Containers {
+		c.stop()
+	}
+	return nil
+}
+
 func (f *Fake) SystemRunning(ctx context.Context) bool      { return true }
 func (f *Fake) Version(ctx context.Context) (string, error) { return "fake", nil }
 func (f *Fake) EnsureNetwork(ctx context.Context, name string) (string, error) {
@@ -128,6 +139,9 @@ func (c *fakeContainer) serve(behaviour string) error {
 
 func (f *Fake) RunWith(ctx context.Context, o RunOpts, stdin io.Reader, stdout io.Writer) error {
 	f.record("runwith " + o.Image + " " + strings.Join(o.Args, " "))
+	if f.RunWithErr != nil {
+		return f.RunWithErr
+	}
 	if stdin != nil {
 		io.Copy(io.Discard, stdin)
 	}

@@ -93,6 +93,11 @@ func (a *Apple) SystemStart(ctx context.Context) error {
 	return err
 }
 
+func (a *Apple) SystemStop(ctx context.Context) error {
+	_, err := a.run(ctx, "system", "stop")
+	return err
+}
+
 func (a *Apple) SystemRunning(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

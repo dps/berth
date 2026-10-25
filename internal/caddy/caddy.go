@@ -175,6 +175,7 @@ func handlers(r Route) []any {
 			"handler":     "static_response",
 			"status_code": 503,
 			"body":        r.App + " is not running (berth status " + r.App + ")\n",
+			"headers":     obj{"Retry-After": []string{"30"}},
 		})
 	}
 	hs = append(hs,

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dps/berth/internal/caddy"
+	"github.com/dps/berth/internal/daemon"
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/github"
 	"github.com/dps/berth/internal/launchd"
@@ -250,18 +251,12 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 // outboundCheck starts a throwaway Alpine container on the berth network
 // and fetches an HTTPS URL, which is what builds and apps need.
 func (d *Doctor) outboundCheck(ctx context.Context, cfg *state.Config) Check {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	var out strings.Builder
-	err := d.RT.RunWith(ctx, runtime.RunOpts{
-		Image:   "alpine:3",
-		Network: cfg.Network,
-		Remove:  true,
-		Args:    []string{"wget", "-q", "-T", "8", "-O", "/dev/null", "https://cloudflare.com/cdn-cgi/trace"},
-	}, nil, &out)
-	if err != nil {
-		return Check{Name: "containers reach the internet", Level: Fail, Detail: lastLine(err.Error()),
-			Fix: "container system stop && container system start (running apps restart automatically)"}
+	if err := daemon.ProbeOutbound(ctx, d.RT, cfg.Network); err != nil {
+		fix := "container system stop && container system start (running apps restart automatically)"
+		if cfg.HealNetwork() {
+			fix += "; berthd also does this by itself after two failed checks"
+		}
+		return Check{Name: "containers reach the internet", Level: Fail, Detail: lastLine(err.Error()), Fix: fix}
 	}
 	return Check{Name: "containers reach the internet", Level: OK}
 }

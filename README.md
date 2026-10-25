@@ -438,11 +438,18 @@ berth exec myapp node -e 'console.log(process.env.PORT)'
 Berth is built to run for months with no one at the screen.
 
 - **Crashes heal themselves.** An app that exits is restarted with backoff
-  (1 s up to 60 s). After 10 failures in a row it's marked `crashed` and left
+  (1 s up to 60 s). After 10 crashes without 10 healthy minutes in between,
+  it's marked `crashed`, its URL answers 503, you're notified, and it's left
   alone until you deploy or `berth restart` it. Databases are restarted
   whenever they're down.
 - **Reboots heal themselves.** When `berthd` starts, it starts Apple's
   container system, the databases, then every app, oldest first.
+- **Network glitches heal themselves.** Apple's container network can lose
+  outbound internet access (so builds fail and apps can't reach external
+  APIs) while the Mac itself is fine. `berthd` checks every 5 minutes. If two
+  checks in a row fail, it restarts the container system, which takes the apps
+  down for about 6 seconds, and notifies you. Set `"auto_heal_network": false`
+  in `~/.berth/config.json` to only be notified.
 - **Upgrades are hands-off.** `brew upgrade berth` replaces the binaries; the
   running `berthd` notices, waits for any deploy in progress, and restarts
   itself. Apps keep running throughout.

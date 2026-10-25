@@ -44,6 +44,88 @@ func backoff(failures int) time.Duration {
 	return min(d, time.Minute)
 }
 
+// ---- container network health ----
+
+// netState tracks the outbound-network probe.
+type netState struct {
+	lastProbe time.Time
+	failures  int
+}
+
+const (
+	netProbeEvery  = 5 * time.Minute
+	netRetryEvery  = time.Minute
+	netFailsToHeal = 2
+)
+
+// ProbeOutbound runs a throwaway Alpine container on the berth network that
+// fetches an HTTPS URL, which is what builds and most apps need.
+func ProbeOutbound(ctx context.Context, rt runtime.Runtime, network string) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return rt.RunWith(ctx, runtime.RunOpts{
+		Image:   "alpine:3",
+		Network: network,
+		Remove:  true,
+		Args:    []string{"wget", "-q", "-T", "8", "-O", "/dev/null", "https://cloudflare.com/cdn-cgi/trace"},
+	}, nil, io.Discard)
+}
+
+// checkNetwork probes containers' outbound network every 5 minutes (each
+// minute once it has failed) and, after two failures in a row, restarts
+// Apple's container system, which has been seen to lose outbound NAT after
+// the Mac's network changes. Running containers stop for a few seconds and
+// are brought back by reconcile.
+func (d *Daemon) checkNetwork(ctx context.Context) {
+	cfg := d.cfg()
+	every := netProbeEvery
+	if d.net.failures > 0 {
+		every = netRetryEvery
+	}
+	if time.Since(d.net.lastProbe) < every || d.Deployer.AnyBusy() {
+		return
+	}
+	d.net.lastProbe = time.Now()
+	err := ProbeOutbound(ctx, d.RT, cfg.Network)
+	if err == nil {
+		if d.net.failures > 0 {
+			d.event(state.Event{Kind: "network", Message: "containers can reach the internet again"})
+		}
+		d.net.failures = 0
+		return
+	}
+	d.net.failures++
+	slog.Warn("containers have no outbound network", "failures", d.net.failures, "err", err)
+	if d.net.failures < netFailsToHeal {
+		return
+	}
+	if !cfg.HealNetwork() {
+		if d.net.failures == netFailsToHeal {
+			d.event(state.Event{Kind: "network", Message: "containers have no outbound network; run `container system stop && container system start` (auto-heal is off)"})
+		}
+		return
+	}
+	d.event(state.Event{Kind: "network", Message: "containers lost outbound network; restarting the container system (apps are down for a few seconds)"})
+	d.healNetwork(ctx)
+}
+
+func (d *Daemon) healNetwork(ctx context.Context) {
+	d.stopTails()
+	if err := d.RT.SystemStop(ctx); err != nil {
+		slog.Error("container system stop", "err", err)
+	}
+	if err := d.RT.SystemStart(ctx); err != nil {
+		slog.Error("container system start", "err", err)
+	}
+	// The restart stopped every container on purpose; it is not a crash.
+	d.mu.Lock()
+	d.crash = map[string]*crashState{}
+	d.mu.Unlock()
+	d.reconcile(ctx)
+	d.net.failures = 0
+	d.net.lastProbe = time.Time{}
+}
+
 func (d *Daemon) superviseLoop(ctx context.Context) {
 	t := time.NewTicker(d.SuperviseEvery)
 	defer t.Stop()
@@ -97,6 +179,7 @@ func (d *Daemon) supervise(ctx context.Context) {
 		d.superviseApp(ctx, a, cs)
 	}
 	d.syncTails(ctx, cs)
+	d.checkNetwork(ctx)
 	if d.mdns != nil {
 		cfg := d.cfg()
 		d.mdns.sync(cfg, apps)
@@ -133,29 +216,36 @@ func (d *Daemon) superviseApp(ctx context.Context, a *state.App, cs []runtime.Co
 	} else if rel.Status != state.StatusCrashed && rel.Status != state.StatusRunning {
 		return // never started (stopped app, failed release)
 	}
-	if st.gaveUp && st.container == rel.Container {
+	// Stays given up until a deploy, rollback or `berth restart` brings up
+	// a new container (the running branch above then resets the state).
+	if st.gaveUp {
 		return
 	}
 	if time.Now().Before(st.next) {
 		return
 	}
-	d.event(state.Event{Kind: "crash", App: a.Name, Message: fmt.Sprintf("v%d container %s is not running; restarting (attempt %d)", rel.N, rel.Container, st.failures+1)})
-	if err := d.Deployer.Recover(ctx, a.Name); err != nil {
-		st.failures++
-		st.next = time.Now().Add(backoff(st.failures))
-		if st.failures >= maxCrashFailures {
-			st.gaveUp = true
-			st.container = ""
-			d.event(state.Event{Kind: "crash.loop", App: a.Name, Message: fmt.Sprintf("%s crashed %d times in a row; giving up until the next deploy or `berth restart %s`", a.Name, st.failures, a.Name)})
+	// Every crash counts, whether or not the restart succeeds; only 10
+	// healthy minutes reset the count.
+	st.failures++
+	if st.failures > maxCrashFailures {
+		st.gaveUp = true
+		st.container = ""
+		d.Deployer.MarkCrashed(a.Name)
+		if err := d.Apply(ctx); err != nil {
+			slog.Warn("caddy apply", "err", err)
 		}
+		d.event(state.Event{Kind: "crash.loop", App: a.Name, Message: fmt.Sprintf("v%d crashed %d times in a row; Berth stopped restarting it until the next deploy or `berth restart %s` (see `berth logs %s`)", rel.N, maxCrashFailures, a.Name, a.Name)})
+		return
+	}
+	d.event(state.Event{Kind: "crash", App: a.Name, Message: fmt.Sprintf("v%d is not running; restarting (crash %d of %d before Berth gives up)", rel.N, st.failures, maxCrashFailures)})
+	st.next = time.Now().Add(d.CrashBackoff(st.failures))
+	if err := d.Deployer.Recover(ctx, a.Name); err != nil {
 		return
 	}
 	if r := d.Store.CurrentRelease(a.Name); r != nil {
 		st.container = r.Container
 	}
 	st.healthy = time.Now()
-	st.failures++ // reset only after 10 healthy minutes
-	st.next = time.Now().Add(backoff(st.failures))
 }
 
 // ---- log tails ----

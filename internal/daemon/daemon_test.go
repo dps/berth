@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -231,5 +232,82 @@ func TestParseMemory(t *testing.T) {
 		if got := ParseMemory(in); got != want {
 			t.Errorf("%q = %d want %d", in, got, want)
 		}
+	}
+}
+
+// An app that crashes every time it is restarted is given up on after 10
+// crashes, even though each restart itself succeeds; a restart resets it.
+func TestCrashLoopGivesUp(t *testing.T) {
+	d, rt, repo := newTestDaemon(t)
+	d.CrashBackoff = func(int) time.Duration { return 0 }
+	params, _ := json.Marshal(CreateParams{Name: "web", Repo: repo})
+	if _, err := d.hCreate(d.ctx, params, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	d.supervise(d.ctx)
+	restarts := 0
+	for i := 0; i < 15; i++ {
+		rt.Crash(d.Store.CurrentRelease("web").Container)
+		before := len(rt.CallLog("run "))
+		d.supervise(d.ctx)
+		if len(rt.CallLog("run ")) > before {
+			restarts++
+		}
+	}
+	if restarts != maxCrashFailures {
+		t.Fatalf("restarted %d times, want %d", restarts, maxCrashFailures)
+	}
+	if rel := d.Store.CurrentRelease("web"); rel.Status != state.StatusCrashed || rel.Container != "" {
+		t.Fatalf("release after giving up: %+v", rel)
+	}
+	if cj, _ := os.ReadFile(d.Store.Path("caddy.json")); !strings.Contains(string(cj), "web is not running") {
+		t.Fatal("a crashed app should get Caddy's immediate 503, not retries against dead slots")
+	}
+	evs, _ := os.ReadFile(d.Store.EventsPath())
+	if strings.Count(string(evs), `"kind":"crash.loop"`) != 1 {
+		t.Fatal("want exactly one crash.loop event")
+	}
+	if _, err := d.hRestart(d.ctx, json.RawMessage(`{"app":"web"}`), &bytes.Buffer{}); err != nil {
+		t.Fatalf("restart after crash loop: %v", err)
+	}
+	if rel := d.Store.CurrentRelease("web"); rel.Status != state.StatusRunning || rel.Container == "" {
+		t.Fatalf("not running after restart: %+v", rel)
+	}
+}
+
+func TestNetworkLossIsHealed(t *testing.T) {
+	d, rt, repo := newTestDaemon(t)
+	params, _ := json.Marshal(CreateParams{Name: "web", Repo: repo})
+	if _, err := d.hCreate(d.ctx, params, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	rt.RunWithErr = errors.New("wget: download timed out")
+	d.checkNetwork(d.ctx) // first failure: wait and see
+	if len(rt.CallLog("system stop")) != 0 {
+		t.Fatal("healed after a single failed probe")
+	}
+	d.net.lastProbe = time.Time{}
+	d.checkNetwork(d.ctx) // second failure: heal
+	if len(rt.CallLog("system stop")) != 1 {
+		t.Fatal("did not restart the container system after two failed probes")
+	}
+	cur := d.Store.CurrentRelease("web")
+	cs, _ := rt.List(d.ctx)
+	if c, ok := runtime.Find(cs, cur.Container); !ok || !c.Running() {
+		t.Fatalf("app not running after heal: %+v", cur)
+	}
+	if st := d.crash["web"]; st != nil && st.failures > 0 {
+		t.Fatal("a deliberate container-system restart counted as a crash")
+	}
+	off := false
+	cfg, _ := d.Store.Config()
+	cfg.AutoHealNetwork = &off
+	d.Store.SaveConfig(cfg)
+	for i := 0; i < 3; i++ {
+		d.net.lastProbe = time.Time{}
+		d.checkNetwork(d.ctx)
+	}
+	if len(rt.CallLog("system stop")) != 1 {
+		t.Fatal("healed with auto_heal_network off")
 	}
 }

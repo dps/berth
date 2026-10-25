@@ -63,6 +63,7 @@ type Image struct {
 // Runtime is everything Berth needs from a container engine.
 type Runtime interface {
 	SystemStart(ctx context.Context) error
+	SystemStop(ctx context.Context) error
 	SystemRunning(ctx context.Context) bool
 	Version(ctx context.Context) (string, error)
 	EnsureNetwork(ctx context.Context, name string) (gateway string, err error)

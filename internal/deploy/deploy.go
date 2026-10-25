@@ -192,7 +192,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 				detail(out, "  container system stop && container system start")
 				detail(out, "(running apps restart automatically), then deploy again. `berth doctor` checks this.")
 				d.Event(state.Event{Kind: "network", App: app.Name, Message: "containers have no outbound network: run `container system stop && container system start`"})
-				err = fmt.Errorf("build failed: containers can't reach the internet (see above)")
+				err = fmt.Errorf("containers can't reach the internet (see above)")
 			}
 			rel.Status, rel.Error = state.StatusFailed, err.Error()
 			d.Store.SaveRelease(app.Name, rel)
@@ -907,6 +907,22 @@ func (d *Deployer) Recover(ctx context.Context, appName string) error {
 		}
 	}
 	return err
+}
+
+// MarkCrashed records that the current release is down and will not be
+// restarted (the supervisor gave up on a crash loop).
+func (d *Deployer) MarkCrashed(appName string) {
+	unlock := d.Lock(appName)
+	defer unlock()
+	rel := d.Store.CurrentRelease(appName)
+	if rel == nil {
+		return
+	}
+	if rel.Container != "" {
+		d.RT.Remove(context.Background(), rel.Container)
+	}
+	rel.Container, rel.Status = "", state.StatusCrashed
+	d.Store.SaveRelease(appName, rel)
 }
 
 // GC removes images and metadata for releases beyond the keep count.
