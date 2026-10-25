@@ -5,7 +5,7 @@ WORKDIR /app
 RUN corepack enable
 {{- end}}
 COPY package.json {{.LockFiles}} ./
-RUN {{.InstallCmd}}
+RUN --mount=type=cache,target=/root/.npm --mount=type=cache,target=/root/.cache {{.InstallCmd}}
 COPY . .
 {{- if .BuildCmd}}
 RUN {{.BuildCmd}}

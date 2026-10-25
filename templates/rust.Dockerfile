@@ -2,11 +2,16 @@
 FROM rust:1 AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked || cargo build --release
+# Cache mounts keep the crate registry and compiled dependencies between
+# deploys, so a code change recompiles only this crate.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=berth-cargo-target-{{.Binary}},target=/src/target,sharing=locked \
+    (cargo build --release --locked || cargo build --release) \
+    && cp target/release/{{.Binary}} /usr/local/bin/app
 
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/{{.Binary}} /usr/local/bin/app
+COPY --from=build /usr/local/bin/app /usr/local/bin/app
 ENV PORT=8080
 EXPOSE 8080
 CMD ["/usr/local/bin/app"]

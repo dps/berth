@@ -228,9 +228,16 @@ func pythonData(dir string, has func(string) bool) (map[string]any, error) {
 			d["PythonVersion"] = m
 		}
 	}
+	var depFiles []string
+	for _, f := range []string{"requirements.txt", "pyproject.toml", "uv.lock", ".python-version"} {
+		if has(f) {
+			depFiles = append(depFiles, f)
+		}
+	}
+	d["DepFiles"] = strings.Join(depFiles, " ")
 	switch {
 	case has("uv.lock"):
-		d["InstallCmd"] = "uv sync --frozen --no-dev"
+		d["InstallCmd"] = "uv sync --frozen --no-dev --no-install-project"
 		d["VenvPath"] = true
 	case has("requirements.txt"):
 		d["InstallCmd"] = "uv pip install --system -r requirements.txt"

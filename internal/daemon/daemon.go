@@ -177,19 +177,11 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if cfg.Tailscale && cfg.TailnetDomain != "" {
 			r.LANHosts = append(r.LANHosts, a.Name+"."+cfg.TailnetDomain)
 		}
-		// The upstreams depend only on the app's slots, never on which
-		// container is running, so deploys, restarts and crash recovery
-		// leave the Caddy config untouched.
-		// A crashed release (given up on) answers 503 at once instead of
-		// Caddy retrying dead slots for 5 s.
+		// The route names the app's SRV service; which release it reaches is
+		// decided per lookup by berthd (see dns.go), so deploys, restarts
+		// and crash recovery leave the Caddy config untouched.
 		if rel := d.Store.CurrentRelease(a.Name); rel != nil && !a.Stopped && rel.Status != state.StatusCrashed {
-			ports := a.Slots
-			if len(ports) == 0 {
-				ports = []int{rel.HostPort}
-			}
-			for _, p := range ports {
-				r.Upstreams = append(r.Upstreams, fmt.Sprintf("127.0.0.1:%d", p))
-			}
+			r.Service = a.Name
 		}
 		if a.Auth != nil {
 			r.AuthUser, r.AuthHash = a.Auth.User, a.Auth.Hash
@@ -201,6 +193,8 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		HTTPListen:  cfg.CaddyHTTP,
 		HTTPSListen: cfg.CaddyHTTPS,
 		LANHTTP:     cfg.CaddyLANHTTP,
+		DNSAddr:     cfg.DNSAddr,
+		SRVDomain:   SRVDomain,
 		StorageDir:  d.Store.Path("caddy"),
 		Routes:      routes,
 	})
@@ -296,6 +290,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	hookSrv := &http.Server{Handler: d.webhookHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
 	go hookSrv.Serve(hookLn)
+	dnsConn, err := listenDNS(cfg.DNSAddr)
+	if err != nil {
+		ln.Close()
+		hookLn.Close()
+		return err
+	}
+	go d.serveDNS(dnsConn)
+	defer dnsConn.Close()
 	slog.Info("berthd started", "version", Version, "home", d.Store.Root, "socket", sock, "webhooks", cfg.WebhookAddr)
 
 	go func() {

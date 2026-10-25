@@ -23,7 +23,7 @@ type Route struct {
 	App         string
 	PublicHosts []string // reached through the tunnel (127.0.0.1:80 server)
 	LANHosts    []string // reached on the LAN (:443, internal CA)
-	Upstreams   []string // the app's two slot ports; empty = no release (503)
+	Service     string   // SRV service name (the app); empty = no running release (503)
 	AuthUser    string
 	AuthHash    string // bcrypt
 	AccessLog   string
@@ -33,6 +33,8 @@ type Options struct {
 	Admin       string // 127.0.0.1:2019
 	HTTPListen  string // 127.0.0.1:80
 	HTTPSListen string // :443, empty disables the LAN server
+	DNSAddr     string // berthd's SRV responder, e.g. 127.0.0.1:7753
+	SRVDomain   string // berth.internal
 	LANHTTP     string // :80 redirect to HTTPS on the LAN, empty disables
 	StorageDir  string // Caddy's data dir (internal CA lives here)
 	Routes      []Route
@@ -61,7 +63,7 @@ func Build(o Options) obj {
 				"include": []string{"http.log.access." + logger},
 			}
 		}
-		h := handlers(r)
+		h := handlers(r, o)
 		// Every config change is a full graceful reload in Caddy, which closes
 		// idle keep-alive connections; a client that reuses one at that
 		// instant sees "connection closed". The tunnel server's only client is
@@ -158,7 +160,7 @@ func Build(o Options) obj {
 	return cfg
 }
 
-func handlers(r Route) []any {
+func handlers(r Route, o Options) []any {
 	var hs []any
 	if r.AuthUser != "" {
 		hs = append(hs, obj{
@@ -170,7 +172,7 @@ func handlers(r Route) []any {
 			}},
 		})
 	}
-	if len(r.Upstreams) == 0 {
+	if r.Service == "" {
 		return append(hs, obj{
 			"handler":     "static_response",
 			"status_code": 503,
@@ -181,31 +183,30 @@ func handlers(r Route) []any {
 	hs = append(hs,
 		obj{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}, "prefer": []string{"zstd", "gzip"}},
 		obj{
-			"handler":   "reverse_proxy",
-			"upstreams": dials(r.Upstreams),
-			// The first slot that accepts a connection gets the request. A
-			// deploy starts the new release in the idle slot and stops the old
-			// one; refused connections are retried on the other slot, so the
-			// route never changes and Caddy never reloads during a deploy.
-			"load_balancing": obj{
-				"selection_policy": obj{"policy": "first"},
-				"try_duration":     "5s",
-				"try_interval":     "50ms",
+			"handler": "reverse_proxy",
+			// The upstream is whatever berthd's SRV record for the app says:
+			// the current release's port, re-resolved every second. A deploy
+			// changes the record, never this config, so Caddy never reloads
+			// and traffic moves within a second; the old release drains its
+			// in-flight requests. If berthd is briefly away, the last answer
+			// stays in use (grace_period).
+			"dynamic_upstreams": obj{
+				"source":       "srv",
+				"service":      r.Service,
+				"proto":        "tcp",
+				"name":         o.SRVDomain,
+				"refresh":      "1s",
+				"grace_period": "1h",
+				"dial_timeout": "2s",
+				"resolver":     obj{"addresses": []string{"udp/" + o.DNSAddr}},
 			},
-			"health_checks": obj{"passive": obj{"fail_duration": "1s", "max_fails": 1}},
+			// Retry refused connections (a release restarting in place).
+			"load_balancing": obj{"try_duration": "5s", "try_interval": "100ms"},
 			// No pooled connections to a release that may be stopping.
 			"transport": obj{"protocol": "http", "keep_alive": obj{"enabled": false}},
 		},
 	)
 	return hs
-}
-
-func dials(addrs []string) []any {
-	out := make([]any, 0, len(addrs))
-	for _, a := range addrs {
-		out = append(out, obj{"dial": a})
-	}
-	return out
 }
 
 func portOf(addr string) int {

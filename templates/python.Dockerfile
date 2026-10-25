@@ -2,10 +2,13 @@
 FROM python:{{.PythonVersion}}-slim
 RUN pip install --no-cache-dir uv
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PORT=8080 UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1
+ENV PYTHONUNBUFFERED=1 PORT=8080 UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+# Dependencies first, so code-only changes reuse this layer.
+COPY {{.DepFiles}} ./
+RUN --mount=type=cache,target=/root/.cache/uv {{.InstallCmd}}
 COPY . .
-RUN {{.InstallCmd}}
 {{- if .VenvPath}}
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 {{- end}}
 EXPOSE 8080

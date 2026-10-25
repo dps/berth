@@ -2,7 +2,7 @@
 FROM oven/bun:1
 WORKDIR /app
 COPY package.json {{.LockFiles}} ./
-RUN bun install --frozen-lockfile || bun install
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile || bun install
 COPY . .
 {{- if .BuildCmd}}
 RUN {{.BuildCmd}}

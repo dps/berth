@@ -619,6 +619,18 @@ files.
 | `BERTH_CONTAINER_BIN` | path to the `container` binary |
 | `BERTH_NO_MDNS=1` | don't advertise `.local` hostnames |
 
+## Example apps
+
+Each is a small repo with no Dockerfile, so Berth's stack detection does the
+work. Each README lists the `berth` commands to deploy it.
+
+| Repo | Stack | Shows |
+| --- | --- | --- |
+| [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, storage mounts, crash recovery |
+| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres; build step, client-side routes |
+| [berth_hello_go](https://github.com/dps/berth_hello_go) | Go standard library | static binary on Alpine |
+| [berth_hello_rust](https://github.com/dps/berth_hello_rust) | Rust + axum | cached dependency builds (4 s redeploys) |
+
 ## How it works
 
 ```
@@ -633,8 +645,9 @@ files.
 ```
 
 - **`berthd`** is the brain: it receives webhooks, builds with `container
-  build`, runs each release in its own micro-VM, health-checks it, switches
-  Caddy over, and watches everything afterwards. It's the only thing that
+  build`, runs each release in its own micro-VM, health-checks it, and
+  switches traffic by updating a DNS SRV record that Caddy re-reads every
+  second (so deploys never reload Caddy). Then it watches everything. It's the only thing that
   writes to `~/.berth`.
 - **Caddy** routes each hostname to the right app, terminates LAN HTTPS,
   compresses responses, writes access logs and enforces basic auth.

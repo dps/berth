@@ -79,6 +79,7 @@ type Config struct {
 	CaddyHTTPS     string `json:"caddy_https"`    // :443 (LAN), empty disables
 	CaddyLANHTTP   string `json:"caddy_lan_http"` // :80 LAN redirect to HTTPS, empty disables
 	TunnelMetrics  string `json:"tunnel_metrics"` // cloudflared --metrics
+	DNSAddr        string `json:"dns_addr"`       // berthd\'s SRV responder for Caddy upstreams
 	PortMin        int    `json:"port_min"`
 	PortMax        int    `json:"port_max"`
 	ServicePortMin int    `json:"service_port_min"`
@@ -104,6 +105,7 @@ func DefaultConfig() *Config {
 		CaddyLANHTTP:    ":80",
 		CaddyHTTPS:      ":443",
 		TunnelMetrics:   "127.0.0.1:20241",
+		DNSAddr:         "127.0.0.1:7753",
 		PortMin:         8001,
 		PortMax:         8999,
 		ServicePortMin:  6001,
