@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dps/berth/internal/runtime"
@@ -43,6 +44,25 @@ var Kinds = map[string]Kind{
 type Manager struct {
 	Store *state.Store
 	RT    runtime.Runtime
+
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+// lock serialises operations that (re)create a service's container, so the
+// supervisor never "restarts" a service that is still being created.
+func (m *Manager) lock(kind, name string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.locks == nil {
+		m.locks = map[string]*sync.Mutex{}
+	}
+	l, ok := m.locks[kind+":"+name]
+	if !ok {
+		l = &sync.Mutex{}
+		m.locks[kind+":"+name] = l
+	}
+	return l
 }
 
 func Password() string {
@@ -76,6 +96,9 @@ func (m *Manager) Create(ctx context.Context, kind, name, image, memory string, 
 	if err := validName(name); err != nil {
 		return nil, err
 	}
+	l := m.lock(kind, name)
+	l.Lock()
+	defer l.Unlock()
 	if _, err := m.Store.Service(kind, name); err == nil {
 		return nil, fmt.Errorf("%s:%s already exists", kind, name)
 	}
@@ -211,6 +234,16 @@ func (m *Manager) WaitReady(ctx context.Context, sv *state.Service, timeout time
 
 // EnsureRunning starts the service container if it is missing or stopped.
 func (m *Manager) EnsureRunning(ctx context.Context, sv *state.Service, cs []runtime.Container) (bool, error) {
+	l := m.lock(sv.Kind, sv.Name)
+	if !l.TryLock() {
+		return false, nil // being created, exposed, upgraded or restored
+	}
+	defer l.Unlock()
+	// Re-read: the service may have changed or gone while we waited.
+	sv, err := m.Store.Service(sv.Kind, sv.Name)
+	if err != nil {
+		return false, nil
+	}
 	name := state.ServiceContainer(sv.Kind, sv.Name)
 	if c, ok := runtime.Find(cs, name); ok && c.Running() {
 		return false, nil
@@ -339,6 +372,9 @@ func (m *Manager) Unlink(ctx context.Context, kind, name, app string) (string, e
 
 // Destroy removes the container and, unless keepData, the volume.
 func (m *Manager) Destroy(ctx context.Context, kind, name string, keepData bool) error {
+	l := m.lock(kind, name)
+	l.Lock()
+	defer l.Unlock()
 	sv, err := m.Store.Service(kind, name)
 	if err != nil {
 		return err
@@ -425,6 +461,13 @@ func (m *Manager) LatestBackup(kind, name string) string {
 
 // Restore loads a dump into the service.
 func (m *Manager) Restore(ctx context.Context, kind, name, file string) error {
+	l := m.lock(kind, name)
+	l.Lock()
+	defer l.Unlock()
+	return m.restore(ctx, kind, name, file)
+}
+
+func (m *Manager) restore(ctx context.Context, kind, name, file string) error {
 	sv, err := m.Store.Service(kind, name)
 	if err != nil {
 		return err
@@ -492,6 +535,9 @@ redis-cli SHUTDOWN NOSAVE >/dev/null 2>&1 || true
 
 // Expose publishes the service on 127.0.0.1:port (0 removes it).
 func (m *Manager) Expose(ctx context.Context, kind, name string, port int) error {
+	l := m.lock(kind, name)
+	l.Lock()
+	defer l.Unlock()
 	sv, err := m.Store.Service(kind, name)
 	if err != nil {
 		return err
@@ -514,6 +560,9 @@ func (m *Manager) Expose(ctx context.Context, kind, name string, port int) error
 // container on a new volume, re-create roles, restore. The old volume is
 // kept and its name returned so the user can delete it once satisfied.
 func (m *Manager) Upgrade(ctx context.Context, name, version string, out io.Writer) (string, error) {
+	l := m.lock("pg", name)
+	l.Lock()
+	defer l.Unlock()
 	sv, err := m.Store.Service("pg", name)
 	if err != nil {
 		return "", err
@@ -550,7 +599,7 @@ func (m *Manager) Upgrade(ctx context.Context, name, version string, out io.Writ
 		}
 	}
 	fmt.Fprintf(out, "-----> Restoring %s\n", filepath.Base(dump))
-	if err := m.Restore(ctx, "pg", name, dump); err != nil {
+	if err := m.restore(ctx, "pg", name, dump); err != nil {
 		return "", m.rollbackUpgrade(ctx, sv, oldImage, oldVolume, cfg, err)
 	}
 	if err := m.Store.SaveService(sv); err != nil {
