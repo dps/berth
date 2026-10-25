@@ -22,8 +22,10 @@ import (
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/gitx"
 	"github.com/dps/berth/internal/rpc"
+	"github.com/dps/berth/internal/runtime"
 	"github.com/dps/berth/internal/services"
 	"github.com/dps/berth/internal/state"
+	"github.com/dps/berth/internal/tunnel"
 )
 
 type handler func(ctx context.Context, params json.RawMessage, out io.Writer) (any, error)
@@ -568,43 +570,73 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 	if err := d.Apply(ctx); err != nil {
 		return nil, err
 	}
-	target := cfg.TunnelID + ".cfargotunnel.com"
-	tok := d.cfToken()
-	if tok != "" {
-		api := d.CloudflareAPI(tok)
-		if zone, err := api.ZoneFor(ctx, p.Host); err != nil {
-			fmt.Fprintf(out, "-----> %v\n       Set this record at your DNS provider:\n       %s CNAME %s\n", err, p.Host, target)
-		} else if err := api.UpsertCNAME(ctx, zone.ID, p.Host, target); err != nil {
-			return nil, err
-		} else {
-			fmt.Fprintf(out, "-----> DNS: %s CNAME %s (proxied)\n", p.Host, target)
-		}
-	} else {
-		fmt.Fprintf(out, "-----> No Cloudflare API token: add DNS yourself:\n       %s CNAME %s (proxied)\n", p.Host, target)
+	if err := d.addDomainDNS(ctx, cfg, p.Host, out); err != nil {
+		return nil, err
 	}
 	restarted, err := d.ApplyTunnel(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	if restarted {
-		fmt.Fprintln(out, "       warning: cloudflared was restarted to pick up the new hostname (in-flight requests may have dropped);")
-		fmt.Fprintln(out, "       add a scoped Cloudflare API token with `berth init --cf-token` for live updates")
+		fmt.Fprintln(out, "       warning: cloudflared was restarted to pick up the new hostname (in-flight requests may have dropped)")
 	}
 	fmt.Fprintf(out, "-----> https://%s\n", p.Host)
 	return map[string]string{"app": p.App, "url": "https://" + p.Host}, nil
 }
 
-func (d *Daemon) removeDomainDNS(ctx context.Context, cfg *state.Config, hosts []string, out io.Writer) {
-	tok := d.cfToken()
-	if tok == "" {
-		return
+// addDomainDNS points host at the tunnel. Zones connected with a browser
+// login (`berth init` for the main domain, `berth cf:login <zone>` for
+// others) use `cloudflared tunnel route dns` with that zone's cert; a scoped
+// API token, if configured, covers any zone it can see; otherwise the
+// record to create is printed.
+func (d *Daemon) addDomainDNS(ctx context.Context, cfg *state.Config, host string, out io.Writer) error {
+	target := cfg.TunnelID + ".cfargotunnel.com"
+	if zone, cert := tunnel.CertForHost(d.zoneCertDir(), host); cert != "" {
+		cli := &tunnel.CLI{Bin: runtime.LookBin("cloudflared"), Origin: cert}
+		if err := cli.RouteDNS(ctx, cfg.TunnelID, host); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "-----> DNS: %s CNAME %s (proxied, zone %s)\n", host, target, zone)
+		return nil
 	}
-	api := d.CloudflareAPI(tok)
-	for _, h := range hosts {
-		if zone, err := api.ZoneFor(ctx, h); err == nil {
-			if err := api.DeleteCNAME(ctx, zone.ID, h, cfg.TunnelID+".cfargotunnel.com"); err == nil {
-				fmt.Fprintf(out, "-----> Removed DNS record for %s\n", h)
+	if tok := d.cfToken(); tok != "" {
+		api := d.CloudflareAPI(tok)
+		if zone, err := api.ZoneFor(ctx, host); err == nil {
+			if err := api.UpsertCNAME(ctx, zone.ID, host, target); err != nil {
+				return err
 			}
+			fmt.Fprintf(out, "-----> DNS: %s CNAME %s (proxied)\n", host, target)
+			return nil
+		}
+	}
+	fmt.Fprintf(out, "-----> %s is not in a zone Berth is logged in to. Either connect the zone\n", host)
+	fmt.Fprintf(out, "       (it opens the browser) and run domains:add again:  berth cf:login <zone>\n")
+	fmt.Fprintf(out, "       or create this record at your DNS provider:  %s CNAME %s (proxied)\n", host, target)
+	return nil
+}
+
+func (d *Daemon) removeDomainDNS(ctx context.Context, cfg *state.Config, hosts []string, out io.Writer) {
+	target := cfg.TunnelID + ".cfargotunnel.com"
+	for _, h := range hosts {
+		var err error
+		if _, cert := tunnel.CertForHost(d.zoneCertDir(), h); cert != "" {
+			var oc *tunnel.OriginCert
+			if oc, err = tunnel.ReadOriginCert(cert); err == nil {
+				err = d.CloudflareAPI(oc.APIToken).DeleteCNAME(ctx, oc.ZoneID, h, target)
+			}
+		} else if tok := d.cfToken(); tok != "" {
+			api := d.CloudflareAPI(tok)
+			var zone *tunnel.Zone
+			if zone, err = api.ZoneFor(ctx, h); err == nil {
+				err = api.DeleteCNAME(ctx, zone.ID, h, target)
+			}
+		} else {
+			continue
+		}
+		if err == nil {
+			fmt.Fprintf(out, "-----> Removed DNS record for %s\n", h)
+		} else {
+			fmt.Fprintf(out, "       could not remove the DNS record for %s (%v); delete it in the Cloudflare dashboard\n", h, err)
 		}
 	}
 }

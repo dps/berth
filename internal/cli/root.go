@@ -106,7 +106,7 @@ func NewRoot() *cobra.Command {
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),
-		cmdNotifySet(), cmdReboot(), cmdReload(), cmdTrustCA(), cmdUninstall())
+		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUninstall())
 	return root
 }
 

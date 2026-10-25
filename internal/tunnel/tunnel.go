@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -66,14 +69,19 @@ func Ready(ctx context.Context, metricsAddr string) bool {
 	return resp.StatusCode == 200
 }
 
-// ---- cloudflared CLI (used by `berth init`) ----
+// ---- cloudflared CLI ----
 
+// CLI runs cloudflared tunnel commands with an explicit origin cert, so
+// Berth never depends on ~/.cloudflared.
 type CLI struct {
 	Bin    string
-	Origin string // directory with cert.pem (cloudflared's origincert)
+	Origin string // origin cert from `cloudflared tunnel login`
 }
 
 func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
+	if c.Origin != "" && len(args) > 0 && args[0] == "tunnel" {
+		args = append([]string{"tunnel", "--origincert", c.Origin}, args[1:]...)
+	}
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -82,6 +90,75 @@ func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
 		return out.String(), fmt.Errorf("cloudflared %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(out.String()))
 	}
 	return out.String(), nil
+}
+
+// Login runs `cloudflared tunnel login`, which opens the browser for the
+// user to pick a zone, and saves the resulting origin cert at dest. It runs
+// with a temporary HOME so an existing ~/.cloudflared/cert.pem is neither
+// in the way nor overwritten.
+func (c *CLI) Login(ctx context.Context, dest string, stdout io.Writer) (*OriginCert, error) {
+	home, err := os.MkdirTemp("", "berth-cf-login-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(home)
+	cmd := exec.CommandContext(ctx, c.Bin, "tunnel", "login")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdout, cmd.Stderr = stdout, stdout
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("cloudflared tunnel login: %w", err)
+	}
+	src := filepath.Join(home, ".cloudflared", "cert.pem")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflared tunnel login did not write a cert: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(dest, b, 0o600); err != nil {
+		return nil, err
+	}
+	return ParseOriginCert(b)
+}
+
+// OriginCert is what `cloudflared tunnel login` hands back: an API token
+// scoped to the zone the user picked in the browser (tunnel management and
+// DNS for that zone), plus the zone and account ids.
+type OriginCert struct {
+	ZoneID    string `json:"zoneID"`
+	AccountID string `json:"accountID"`
+	APIToken  string `json:"apiToken"`
+}
+
+func ReadOriginCert(path string) (*OriginCert, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOriginCert(b)
+}
+
+// ParseOriginCert reads the token block of a cloudflared cert.pem.
+func ParseOriginCert(b []byte) (*OriginCert, error) {
+	for {
+		var blk *pem.Block
+		blk, b = pem.Decode(b)
+		if blk == nil {
+			return nil, fmt.Errorf("origin cert has no tunnel token block")
+		}
+		if !strings.Contains(blk.Type, "TOKEN") {
+			continue
+		}
+		c := &OriginCert{}
+		if err := json.Unmarshal(blk.Bytes, c); err != nil {
+			return nil, fmt.Errorf("origin cert token: %w", err)
+		}
+		if c.APIToken == "" || c.ZoneID == "" {
+			return nil, fmt.Errorf("origin cert token is incomplete")
+		}
+		return c, nil
+	}
 }
 
 type tunnelInfo struct {
@@ -115,12 +192,20 @@ func (c *CLI) Create(ctx context.Context, name, credFile string) (string, error)
 	return c.FindTunnel(ctx, name)
 }
 
-func (c *CLI) RouteDNS(ctx context.Context, name, hostname string) error {
-	_, err := c.run(ctx, "tunnel", "route", "dns", "--overwrite-dns", name, hostname)
+// FetchCredentials writes an existing tunnel's credentials file.
+func (c *CLI) FetchCredentials(ctx context.Context, name, credFile string) error {
+	_, err := c.run(ctx, "tunnel", "token", "--cred-file", credFile, name)
 	return err
 }
 
-// ---- Cloudflare API (scoped token) ----
+// RouteDNS points hostname (which must be in the origin cert's zone) at
+// the tunnel with a proxied CNAME.
+func (c *CLI) RouteDNS(ctx context.Context, tunnel, hostname string) error {
+	_, err := c.run(ctx, "tunnel", "route", "dns", "--overwrite-dns", tunnel, hostname)
+	return err
+}
+
+// ---- Cloudflare API (login-cert token or a scoped token) ----
 
 type API struct {
 	Token   string
@@ -185,6 +270,12 @@ type Zone struct {
 	Account struct {
 		ID string `json:"id"`
 	} `json:"account"`
+}
+
+// ZoneByID looks up a zone's name.
+func (a *API) ZoneByID(ctx context.Context, id string) (*Zone, error) {
+	z := &Zone{}
+	return z, a.do(ctx, "GET", "/zones/"+id, nil, z)
 }
 
 // ZoneFor finds the zone that hostname belongs to (longest suffix match).
@@ -291,4 +382,25 @@ func (a *API) SetWebhookFilter(ctx context.Context, zoneID, hooksHost string, ra
 		rules = append(rules, ours)
 	}
 	return a.do(ctx, "PUT", path, map[string]any{"rules": rules}, nil)
+}
+
+// ---- zone certs ----
+
+// ZoneCertPath is where Berth keeps the login cert for one Cloudflare zone.
+func ZoneCertPath(dir, zone string) string { return filepath.Join(dir, zone+".pem") }
+
+// CertForHost finds the login cert whose zone contains hostname (longest
+// match), or "" if no connected zone covers it.
+func CertForHost(dir, hostname string) (zone, path string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		z, ok := strings.CutSuffix(e.Name(), ".pem")
+		if !ok {
+			continue
+		}
+		if (hostname == z || strings.HasSuffix(hostname, "."+z)) && len(z) > len(zone) {
+			zone, path = z, filepath.Join(dir, e.Name())
+		}
+	}
+	return zone, path
 }

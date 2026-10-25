@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -171,10 +172,18 @@ func (c *Client) HookRanges(ctx context.Context) ([]string, error) {
 
 // ---- device flow ----
 
-// Device flow needs a GitHub OAuth app with device flow enabled. Berth has
-// no published app of its own yet, so the client id comes from
-// BERTH_GITHUB_CLIENT_ID; without it `berth init` uses `gh auth token` or
-// asks for a token (--github-token).
+// DefaultClientID is Berth's GitHub OAuth app (device flow enabled). A
+// client id is public; device flow needs no client secret.
+const DefaultClientID = ""
+
+// ClientID is the OAuth app used for browser login: BERTH_GITHUB_CLIENT_ID
+// if set, else Berth's own app.
+func ClientID() string {
+	if id := os.Getenv("BERTH_GITHUB_CLIENT_ID"); id != "" {
+		return id
+	}
+	return DefaultClientID
+}
 
 type DeviceCode struct {
 	DeviceCode      string `json:"device_code"`

@@ -104,7 +104,27 @@ func (d *Daemon) secret(name string) string {
 }
 
 func (d *Daemon) githubToken() string { return d.secret("github.token") }
-func (d *Daemon) cfToken() string     { return d.secret("cloudflare.token") }
+
+// cfToken is the optional scoped API token (`init --cf-token`), needed only
+// for the webhook IP filter and zones not connected by browser login.
+func (d *Daemon) cfToken() string { return d.secret("cloudflare.token") }
+
+func (d *Daemon) zoneCertDir() string {
+	return filepath.Join(d.Store.SecretsDir(), "cloudflared", "zones")
+}
+
+// tunnelToken is the token used for the tunnel's remote configuration: the
+// scoped token if there is one, else the token from the main zone's
+// browser login.
+func (d *Daemon) tunnelToken(cfg *state.Config) string {
+	if tok := d.cfToken(); tok != "" {
+		return tok
+	}
+	if c, err := tunnel.ReadOriginCert(tunnel.ZoneCertPath(d.zoneCertDir(), cfg.Domain)); err == nil {
+		return c.APIToken
+	}
+	return ""
+}
 
 func (d *Daemon) gitAuth(a *state.App) gitx.Auth {
 	auth := gitx.Auth{KnownHosts: filepath.Join(d.Store.SecretsDir(), "known_hosts")}
@@ -210,8 +230,13 @@ func (d *Daemon) ApplyTunnel(ctx context.Context, restartOK bool) (restarted boo
 	if err := state.WriteFile(path, []byte(local), 0o600); err != nil {
 		return false, err
 	}
-	if tok := d.cfToken(); tok != "" && cfg.CFAccountID != "" {
-		return false, d.CloudflareAPI(tok).PutTunnelConfig(ctx, cfg.CFAccountID, cfg.TunnelID, rules)
+	if tok := d.tunnelToken(cfg); tok != "" && cfg.CFAccountID != "" {
+		err := d.CloudflareAPI(tok).PutTunnelConfig(ctx, cfg.CFAccountID, cfg.TunnelID, rules)
+		if err == nil {
+			return false, nil
+		}
+		// Fall back to the local config file and a cloudflared restart.
+		slog.Warn("remote tunnel config failed; using the local config file", "err", err)
 	}
 	if string(old) != local && restartOK && cfg.Launchd && launchd.Loaded(launchd.LabelCloudflared) {
 		return true, launchd.Restart(launchd.LabelCloudflared)

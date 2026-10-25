@@ -66,7 +66,7 @@ func cmdInit() *cobra.Command {
 	f.BoolVar(&o.cfIPFilter, "cf-ip-filter", false, "only let GitHub's webhook IPs reach hooks.<domain> (Cloudflare WAF rule)")
 	f.BoolVar(&o.unattended, "unattended", false, "plan for FileVault off + automatic login, so power cuts recover with no one present")
 	f.StringVar(&o.githubToken, "github-token", "", "GitHub token with repo and admin:repo_hook scopes")
-	f.StringVar(&o.cfToken, "cf-token", "", "scoped Cloudflare API token (Cloudflare Tunnel: Edit, DNS: Edit)")
+	f.StringVar(&o.cfToken, "cf-token", "", "Cloudflare API token with Zone · WAF · Edit, only needed for --cf-ip-filter")
 	f.BoolVar(&o.noLaunchd, "no-launchd", false, "do not install LaunchAgents (run berthd yourself)")
 	f.BoolVarP(&o.yes, "yes", "y", false, "non-interactive: accept defaults, skip optional prompts and sudo steps")
 	f.StringVar(&o.tunnelName, "tunnel-name", "berth", "Cloudflare tunnel name")
@@ -277,15 +277,13 @@ func runInit(o initOpts) error {
 
 func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOpts) error {
 	cli := &tunnel.CLI{Bin: runtime.LookBin("cloudflared")}
-	home, _ := os.UserHomeDir()
-	if _, err := os.Stat(filepath.Join(home, ".cloudflared", "cert.pem")); err != nil {
-		step("Logging in to Cloudflare (pick the zone for %s in the browser)", cfg.Domain)
-		c := exec.Command(cli.Bin, "tunnel", "login")
-		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("cloudflared tunnel login: %w", err)
-		}
+	oc, err := cfLogin(ctx, s, cli, cfg.Domain)
+	if err != nil {
+		return err
 	}
+	cfg.CFAccountID, cfg.CFZoneID = oc.AccountID, oc.ZoneID
+	cli.Origin = tunnel.ZoneCertPath(zoneCertDir(s), cfg.Domain)
+
 	id, err := cli.FindTunnel(ctx, cfg.TunnelName)
 	if err != nil {
 		return err
@@ -304,109 +302,133 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 	cred := filepath.Join(s.SecretsDir(), "cloudflared", id+".json")
 	if _, err := os.Stat(cred); err != nil {
 		// The tunnel exists (e.g. created on another Mac); fetch its credentials.
-		if _, err := exec.Command(cli.Bin, "tunnel", "token", "--cred-file", cred, cfg.TunnelName).CombinedOutput(); err != nil {
+		if err := cli.FetchCredentials(ctx, cfg.TunnelName, cred); err != nil {
 			return fmt.Errorf("tunnel %q exists but its credentials are not on this Mac; delete it (`cloudflared tunnel delete %s`) or copy %s.json into %s", cfg.TunnelName, cfg.TunnelName, id, filepath.Dir(cred))
 		}
 	}
 	os.Chmod(cred, 0o600)
 	cfg.TunnelID = id
-	if b, err := os.ReadFile(cred); err == nil {
-		var c struct {
-			AccountTag string `json:"AccountTag"`
-		}
-		json.Unmarshal(b, &c)
-		cfg.CFAccountID = c.AccountTag
-	}
 	step("Routing *.%s to tunnel %s", cfg.Domain, id[:8])
-	if err := cli.RouteDNS(ctx, cfg.TunnelName, "*."+cfg.Domain); err != nil {
+	if err := cli.RouteDNS(ctx, id, "*."+cfg.Domain); err != nil {
 		return err
 	}
 
+	// A scoped API token is optional; the browser login covers everything
+	// except the webhook IP filter (which needs Zone · WAF · Edit).
 	tokPath := filepath.Join(s.SecretsDir(), "cloudflare.token")
 	tok := o.cfToken
-	if tok == "" {
+	if tok == "" && cfg.CFIPFilter {
 		if b, err := os.ReadFile(tokPath); err == nil {
 			tok = strings.TrimSpace(string(b))
+		} else if !o.yes {
+			note("--cf-ip-filter needs an API token with Zone · WAF · Edit for %s;", cfg.Domain)
+			note("create one at https://dash.cloudflare.com/profile/api-tokens")
+			tok = ask("       Paste it: ")
 		}
-	}
-	if tok == "" && !o.yes {
-		note("Optional: a scoped Cloudflare API token lets `berth domains:add` update the tunnel")
-		note("live and create DNS records. Create one at https://dash.cloudflare.com/profile/api-tokens")
-		note("with: Account · Cloudflare Tunnel · Edit, and Zone · DNS · Edit (plus Zone · WAF · Edit for --cf-ip-filter).")
-		tok = ask("       Paste it (or press Enter to skip): ")
+		if tok == "" {
+			return fmt.Errorf("--cf-ip-filter needs a Cloudflare API token (--cf-token) with Zone · WAF · Edit")
+		}
 	}
 	if tok != "" {
-		api := tunnel.NewAPI(tok)
-		if err := api.Verify(ctx); err != nil {
+		if err := tunnel.NewAPI(tok).Verify(ctx); err != nil {
 			return fmt.Errorf("Cloudflare token: %w", err)
-		}
-		zone, err := api.ZoneFor(ctx, "x."+cfg.Domain)
-		if err != nil {
-			return err
-		}
-		cfg.CFZoneID = zone.ID
-		if cfg.CFAccountID == "" {
-			cfg.CFAccountID = zone.Account.ID
 		}
 		if err := state.WriteFile(tokPath, []byte(tok+"\n"), 0o600); err != nil {
 			return err
 		}
-		note("Cloudflare API token saved; the tunnel's ingress is managed remotely (live updates)")
-	} else if cfg.CFIPFilter {
-		return fmt.Errorf("--cf-ip-filter needs a Cloudflare API token (--cf-token) with Zone · WAF · Edit")
+		note("Cloudflare API token saved")
 	}
 	return nil
 }
 
+func zoneCertDir(s *state.Store) string { return filepath.Join(s.SecretsDir(), "cloudflared", "zones") }
+
+// cfLogin returns the saved login for zone, or opens the browser for a new
+// one (cloudflared tunnel login) and checks the user picked that zone.
+func cfLogin(ctx context.Context, s *state.Store, cli *tunnel.CLI, zone string) (*tunnel.OriginCert, error) {
+	path := tunnel.ZoneCertPath(zoneCertDir(s), zone)
+	if oc, err := tunnel.ReadOriginCert(path); err == nil {
+		return oc, nil
+	}
+	step("Opening Cloudflare in your browser: log in and choose %s", zone)
+	oc, err := cli.Login(ctx, path, os.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	if z, err := tunnel.NewAPI(oc.APIToken).ZoneByID(ctx, oc.ZoneID); err == nil && z.Name != zone {
+		os.Remove(path)
+		return nil, fmt.Errorf("you authorized %s in the browser, not %s; run the command again and pick %s", z.Name, zone, zone)
+	}
+	note("Cloudflare: logged in for %s", zone)
+	return oc, nil
+}
+
 func initGitHub(ctx context.Context, s *state.Store, cfg *state.Config, o initOpts) error {
 	path := filepath.Join(s.SecretsDir(), "github.token")
-	tok := o.githubToken
-	source := "--github-token"
-	if tok == "" {
-		if b, err := os.ReadFile(path); err == nil {
-			tok, source = strings.TrimSpace(string(b)), "saved token"
+	try := func(tok, source string) bool {
+		if tok == "" {
+			return false
 		}
-	}
-	if tok == "" {
-		if out, err := exec.Command(runtime.LookBin("gh"), "auth", "token").Output(); err == nil {
-			tok, source = strings.TrimSpace(string(out)), "gh auth token"
-		}
-	}
-	if tok == "" && os.Getenv("BERTH_GITHUB_CLIENT_ID") != "" && !o.yes {
-		gh := github.New("")
-		dc, err := gh.StartDeviceFlow(ctx, os.Getenv("BERTH_GITHUB_CLIENT_ID"), []string{"repo", "admin:repo_hook"})
+		login, err := github.New(tok).User(ctx)
 		if err != nil {
-			return err
+			note("GitHub token from %s did not work: %v", source, err)
+			return false
 		}
-		step("GitHub login: open %s and enter %s", dc.VerificationURI, dc.UserCode)
-		exec.Command("open", dc.VerificationURI).Run()
-		tok, err = gh.PollDeviceFlow(ctx, os.Getenv("BERTH_GITHUB_CLIENT_ID"), dc)
-		if err != nil {
-			return err
+		if err := state.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
+			note("saving GitHub token: %v", err)
+			return false
 		}
-		source = "device flow"
+		cfg.GitHubUser = login
+		step("GitHub: signed in as @%s (%s)", login, source)
+		return true
 	}
-	if tok == "" && !o.yes {
+	if try(o.githubToken, "--github-token") {
+		return nil
+	}
+	if b, err := os.ReadFile(path); err == nil && try(strings.TrimSpace(string(b)), "saved login") {
+		return nil
+	}
+	if clientID := github.ClientID(); clientID != "" && !o.yes {
+		tok, err := githubBrowserLogin(ctx, clientID)
+		if err != nil {
+			note("GitHub browser login failed: %v", err)
+		} else if try(tok, "browser login") {
+			return nil
+		}
+	}
+	if out, err := exec.Command(runtime.LookBin("gh"), "auth", "token").Output(); err == nil && try(strings.TrimSpace(string(out)), "gh auth token") {
+		return nil
+	}
+	if !o.yes {
 		note("GitHub: Berth needs a token to clone private repos and register webhooks.")
 		note("Create a classic token with scopes `repo` and `admin:repo_hook` at")
 		note("https://github.com/settings/tokens/new?scopes=repo,admin:repo_hook&description=berth")
-		tok = ask("       Paste it (or press Enter to skip; public repos still work by polling): ")
-		source = "pasted"
+		if try(ask("       Paste it (or press Enter to skip; public repos still work by polling): "), "pasted") {
+			return nil
+		}
 	}
-	if tok == "" {
-		note("No GitHub token: public repos only, deploys by polling")
-		return nil
-	}
-	login, err := github.New(tok).User(ctx)
-	if err != nil {
-		return fmt.Errorf("GitHub token (%s): %w", source, err)
-	}
-	if err := state.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
-		return err
-	}
-	cfg.GitHubUser = login
-	step("GitHub: signed in as @%s (%s)", login, source)
+	note("No GitHub login: public repos only, deploys by polling")
 	return nil
+}
+
+// githubBrowserLogin runs GitHub's device flow: the code is copied to the
+// clipboard and the browser opens on the page that asks for it.
+func githubBrowserLogin(ctx context.Context, clientID string) (string, error) {
+	gh := github.New("")
+	dc, err := gh.StartDeviceFlow(ctx, clientID, []string{"repo", "admin:repo_hook"})
+	if err != nil {
+		return "", err
+	}
+	copied := ""
+	clip := exec.Command("pbcopy")
+	clip.Stdin = strings.NewReader(dc.UserCode)
+	if clip.Run() == nil {
+		copied = " (copied to your clipboard)"
+	}
+	step("Opening GitHub in your browser to authorize Berth")
+	note("Enter the code %s%s at %s", dc.UserCode, copied, dc.VerificationURI)
+	exec.Command("open", dc.VerificationURI).Run()
+	return gh.PollDeviceFlow(ctx, clientID, dc)
 }
 
 // installAgents writes and loads the three LaunchAgents.

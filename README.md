@@ -51,8 +51,9 @@ berth rollback myapp                            # undo the last deploy
   comfortably runs about 20 small apps plus a database.
 - **A domain on Cloudflare** (the free plan is fine) for public URLs. Without
   one, Berth still works on your LAN, or privately over Tailscale.
-- **A GitHub account.** Berth needs a token to clone private repos and
-  register webhooks. Public repos work without one, deploying by polling.
+- **A GitHub account.** You authorize Berth in the browser so it can clone
+  private repos and register webhooks. Public repos work without it, deploying
+  by polling.
 
 Homebrew installs the rest: Apple's
 [`container`](https://github.com/apple/container) runtime,
@@ -73,34 +74,26 @@ berth init --domain example.com
    `cloudflared`).
 2. **Starts Apple's container system.** The first run downloads a small Linux
    kernel.
-3. **Connects Cloudflare.** A browser opens for `cloudflared tunnel login`;
-   pick the zone for your domain. Berth creates a tunnel named `berth` and
-   points `*.example.com` at it, so every future app gets its hostname with no
-   DNS step.
-4. **Optionally takes a Cloudflare API token**, which lets custom domains
-   update live. Create one at
-   [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
-   with *Account · Cloudflare Tunnel · Edit* and *Zone · DNS · Edit* (add
-   *Zone · WAF · Edit* if you'll use `--cf-ip-filter`). You can skip this and
-   add it later.
-5. **Gets a GitHub token**, in this order: `--github-token`, then your
-   logged-in GitHub CLI (`gh auth token`), then a token you paste. A classic
-   token with the `repo` and `admin:repo_hook` scopes works;
-   [create one here](https://github.com/settings/tokens/new?scopes=repo,admin:repo_hook&description=berth).
-6. **Installs three background services** (launchd agents): `berthd`, Caddy
+3. **Logs in to Cloudflare in your browser.** Pick `example.com` when
+   Cloudflare asks which zone to authorize. Berth creates a tunnel named
+   `berth` and points `*.example.com` at it, so every future app gets its
+   hostname with no DNS step. There's no API token to create: the login is
+   all Berth needs.
+4. **Logs in to GitHub in your browser.** The page asks for a one-time code,
+   which Berth has already copied to your clipboard; paste it and click
+   *Authorize*. (If browser login isn't available, Berth uses your logged-in
+   GitHub CLI, or asks you to paste a classic token with the `repo` and
+   `admin:repo_hook` scopes.)
+5. **Installs three background services** (launchd agents): `berthd`, Caddy
    and cloudflared. They start at login and restart if they die.
-7. **Asks before the two things that need `sudo`**: keeping the Mac awake and
+6. **Asks before the two things that need `sudo`**: keeping the Mac awake and
    restarting it after power loss (`pmset`), and trusting Caddy's local
    certificate authority so `https://*.local` shows a lock in Safari.
-8. **Explains the FileVault trade-off** (see
+7. **Explains the FileVault trade-off** (see
    [Reboots and FileVault](#reboots-and-filevault)) and prints a health check.
 
-`init` is safe to re-run. It keeps your existing settings and changes only
-what the flags say, for example to add a Cloudflare token later:
-
-```bash
-berth init --cf-token <token>
-```
+`init` is safe to re-run. It keeps your existing settings and logins and
+changes only what the flags say.
 
 ### Setup variations
 
@@ -108,8 +101,8 @@ berth init --cf-token <token>
 | --- | --- |
 | LAN only, no Cloudflare | `berth init --no-tunnel` |
 | Private access from anywhere via Tailscale | `berth init --no-tunnel --tailscale` |
-| Fully scripted, no prompts | `berth init --domain example.com --github-token ghp_… --cf-token … --yes` |
-| Only GitHub's servers may reach the webhook URL | `berth init --cf-ip-filter` (needs the WAF permission on your Cloudflare token) |
+| Fully scripted, no browser | `berth init --domain example.com --github-token ghp_… --yes` (Cloudflare still needs one browser login, or a copied `~/.berth/secrets/cloudflared/`) |
+| Only GitHub's servers may reach the webhook URL | `berth init --cf-ip-filter --cf-token …` (the one feature that needs an API token, with *Zone · WAF · Edit*) |
 | Recover from power cuts with nobody present | `berth init --unattended` (see [Reboots and FileVault](#reboots-and-filevault)) |
 | Public repos only, no GitHub token | `berth init --skip-github` |
 
@@ -405,11 +398,19 @@ berth domains:list myapp
 berth domains:remove myapp www.mysite.com
 ```
 
-If the domain is on your Cloudflare account and you gave `init` an API token,
-Berth creates the DNS record and updates the tunnel live. Otherwise it prints
-the CNAME to create (`www.mysite.com → <tunnel-id>.cfargotunnel.com`, proxied).
-Without a token it also has to restart cloudflared, which drops in-flight
-requests for a moment.
+Hostnames under your main domain just work. For a domain in another zone on
+your Cloudflare account, log in to that zone once (it opens the browser), then
+add the hostname:
+
+```bash
+berth cf:login mysite.com
+berth domains:add myapp www.mysite.com
+```
+
+Berth creates the DNS record and updates the tunnel live, with no restart. For
+a domain whose DNS is elsewhere, `domains:add` prints the record to create
+(`www.mysite.com CNAME <tunnel-id>.cfargotunnel.com`); it must still be a
+Cloudflare-proxied zone for the tunnel to serve it.
 
 ### Private apps and passwords
 
@@ -521,6 +522,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | **Setup** | |
 | `berth init --domain d` | one-time setup; safe to re-run (flags above) |
 | `berth doctor [--images]` | check everything and print fixes |
+| `berth cf:login <zone>` | connect another Cloudflare zone (browser login), for custom domains |
 | `berth trust-ca` | trust Caddy's local CA in your login keychain |
 | `berth uninstall [--purge]` | remove Berth |
 | **Apps** | |

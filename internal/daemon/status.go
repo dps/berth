@@ -143,7 +143,7 @@ func (d *Daemon) Status(ctx context.Context) (*Status, error) {
 	switch {
 	case cfg.NoTunnel || cfg.TunnelID == "":
 		sys.TunnelMode = "off"
-	case d.cfToken() != "" && cfg.CFAccountID != "":
+	case d.tunnelToken(cfg) != "" && cfg.CFAccountID != "":
 		sys.TunnelMode = "remote"
 	default:
 		sys.TunnelMode = "local"

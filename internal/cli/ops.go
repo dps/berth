@@ -15,6 +15,7 @@ import (
 	"github.com/dps/berth/internal/doctor"
 	"github.com/dps/berth/internal/launchd"
 	"github.com/dps/berth/internal/runtime"
+	"github.com/dps/berth/internal/tunnel"
 )
 
 func cmdDoctor() *cobra.Command {
@@ -158,6 +159,27 @@ func trustCA() error {
 	c := exec.Command("security", "add-trusted-cert", "-r", "trustRoot", "-k", filepath.Join(home, "Library", "Keychains", "login.keychain-db"), root)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()
+}
+
+func cmdCFLogin() *cobra.Command {
+	return &cobra.Command{
+		Use:     "cf:login <zone>",
+		Short:   "Connect another Cloudflare zone by logging in through the browser (for domains:add)",
+		Example: "  berth cf:login mysite.com\n  berth domains:add myapp www.mysite.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			zone := strings.ToLower(strings.TrimSuffix(args[0], "."))
+			s := store()
+			if _, err := s.Config(); err != nil {
+				return err
+			}
+			if _, err := cfLogin(cmd.Context(), s, &tunnel.CLI{Bin: runtime.LookBin("cloudflared")}, zone); err != nil {
+				return err
+			}
+			fmt.Printf("-----> Connected %s; add hostnames with `berth domains:add <app> <host>.%s`\n", zone, zone)
+			return nil
+		},
+	}
 }
 
 func cmdTrustCA() *cobra.Command {

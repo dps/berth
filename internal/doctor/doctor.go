@@ -182,14 +182,25 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 		} else {
 			add(Check{Name: "wildcard DNS", Level: Fail, Detail: fmt.Sprint(err), Fix: fmt.Sprintf("cloudflared tunnel route dns %s '*.%s'", cfg.TunnelName, cfg.Domain)})
 		}
-		if tok, _ := os.ReadFile(filepath.Join(d.Store.SecretsDir(), "cloudflare.token")); len(tok) > 0 {
-			if err := tunnel.NewAPI(strings.TrimSpace(string(tok))).Verify(ctx); err == nil {
-				add(Check{Name: "Cloudflare API token", Level: OK})
-			} else {
-				add(Check{Name: "Cloudflare API token", Level: Fail, Detail: err.Error(), Fix: "berth init --cf-token <new token>"})
-			}
+		certDir := filepath.Join(d.Store.SecretsDir(), "cloudflared", "zones")
+		if oc, err := tunnel.ReadOriginCert(tunnel.ZoneCertPath(certDir, cfg.Domain)); err != nil {
+			add(Check{Name: "Cloudflare login", Level: Fail, Detail: "no login for " + cfg.Domain, Fix: "berth init (opens the browser)"})
+		} else if err := tunnel.NewAPI(oc.APIToken).Verify(ctx); err != nil {
+			add(Check{Name: "Cloudflare login", Level: Fail, Detail: err.Error(), Fix: "rm " + tunnel.ZoneCertPath(certDir, cfg.Domain) + " && berth init"})
 		} else {
-			add(Check{Name: "Cloudflare API token", Level: Warn, Detail: "none: custom domains restart cloudflared", Fix: "berth init --cf-token <token> (Cloudflare Tunnel: Edit, DNS: Edit)"})
+			zones := []string{}
+			entries, _ := os.ReadDir(certDir)
+			for _, e := range entries {
+				zones = append(zones, strings.TrimSuffix(e.Name(), ".pem"))
+			}
+			add(Check{Name: "Cloudflare login", Level: OK, Detail: "zones " + strings.Join(zones, ", ")})
+		}
+		if tok, _ := os.ReadFile(filepath.Join(d.Store.SecretsDir(), "cloudflare.token")); len(tok) > 0 {
+			if err := tunnel.NewAPI(strings.TrimSpace(string(tok))).Verify(ctx); err != nil {
+				add(Check{Name: "Cloudflare API token", Level: Fail, Detail: err.Error(), Fix: "berth init --cf-token <new token>"})
+			} else {
+				add(Check{Name: "Cloudflare API token", Level: OK})
+			}
 		}
 	}
 
