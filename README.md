@@ -20,6 +20,7 @@ manage, no YAML, no Docker Desktop, and no `sudo` after setup.
 berth pg:create db && berth pg:link db myapp    # a database, wired in as DATABASE_URL
 berth logs myapp -f                             # follow the logs
 berth rollback myapp                            # undo the last deploy
+berth access myapp signed-in                    # Google sign-in in front of it
 ```
 
 ---
