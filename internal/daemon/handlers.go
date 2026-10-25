@@ -53,6 +53,7 @@ func (d *Daemon) handlers() map[string]handler {
 		"auth.group":      d.hAuthGroup,
 		"auth.revoke":     d.hAuthRevoke,
 		"access.set":      d.hAccessSet,
+		"app.setrepo":     d.hSetRepo,
 		"storage.mount":   d.hStorageMount,
 		"storage.unmount": d.hStorageUnmount,
 		"svc.create":      d.hSvcCreate,
@@ -209,24 +210,7 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 	}
 	d.installHook(app)
 
-	switch {
-	case app.Repo == "":
-		fmt.Fprintf(out, "-----> No --repo: deploy with `git push berth %s` (see `berth git:remote %s`) or `berth deploy`\n", app.Branch, app.Name)
-	case app.IsGitHub() && !p.NoWebhook && !cfg.NoTunnel && cfg.Domain != "" && d.githubToken() != "":
-		hookURL := fmt.Sprintf("https://hooks.%s/github/%s", cfg.Domain, app.Name)
-		id, err := d.GitHubAPI(d.githubToken()).CreateHook(ctx, app.Repo, hookURL, app.Webhook.Secret)
-		if err != nil {
-			fmt.Fprintf(out, "-----> Could not register a webhook on github.com/%s (%v); polling every 60 s instead\n", app.Repo, err)
-			res.Webhook = "polling"
-		} else {
-			d.updateApp(app.Name, func(a *state.App) { a.Webhook.ID = id })
-			fmt.Fprintf(out, "-----> Registered webhook on github.com/%s\n", app.Repo)
-			res.Webhook = "registered"
-		}
-	default:
-		fmt.Fprintf(out, "-----> Watching %s@%s by polling every 60 s\n", app.Repo, app.Branch)
-		res.Webhook = "polling"
-	}
+	res.Webhook = d.registerWebhook(ctx, cfg, app, out)
 	if err := d.Apply(ctx); err != nil {
 		fmt.Fprintf(out, "       warning: proxy update failed: %v\n", err)
 	}
@@ -247,6 +231,92 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 		return res, fmt.Errorf("app created, but the first deploy failed: %w (fix and `git push`, or `berth deploy %s`)", err, app.Name)
 	}
 	return res, nil
+}
+
+// registerWebhook adds a push webhook on GitHub when it can, and says how
+// the app will be watched otherwise: "registered", "polling" or "none".
+func (d *Daemon) registerWebhook(ctx context.Context, cfg *state.Config, app *state.App, out io.Writer) string {
+	switch {
+	case app.Repo == "":
+		fmt.Fprintf(out, "-----> No --repo: deploy with `git push berth %s` (see `berth git:remote %s`) or `berth deploy`\n", app.Branch, app.Name)
+		return "none"
+	case app.IsGitHub() && !app.NoWebhook && !cfg.NoTunnel && cfg.Domain != "" && d.githubToken() != "":
+		hookURL := fmt.Sprintf("https://hooks.%s/github/%s", cfg.Domain, app.Name)
+		id, err := d.GitHubAPI(d.githubToken()).CreateHook(ctx, app.Repo, hookURL, app.Webhook.Secret)
+		if err != nil {
+			fmt.Fprintf(out, "-----> Could not register a webhook on github.com/%s (%v); polling every 60 s instead\n", app.Repo, err)
+			return "polling"
+		}
+		d.updateApp(app.Name, func(a *state.App) { a.Webhook.ID = id })
+		fmt.Fprintf(out, "-----> Registered webhook on github.com/%s\n", app.Repo)
+		return "registered"
+	default:
+		fmt.Fprintf(out, "-----> Watching %s@%s by polling every 60 s\n", app.Repo, app.Branch)
+		return "polling"
+	}
+}
+
+type SetRepoParams struct {
+	App    string `json:"app"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// hSetRepo points an app at another repository (or branch) without touching
+// its releases, config, links or data. The old GitHub webhook is removed
+// and a new one registered with a fresh secret; nothing redeploys until the
+// branch moves past the commit that is live now.
+func (d *Daemon) hSetRepo(ctx context.Context, params json.RawMessage, out io.Writer) (any, error) {
+	var p SetRepoParams
+	if err := decode(params, &p); err != nil {
+		return nil, err
+	}
+	if p.Repo == "" {
+		return nil, fmt.Errorf("usage: berth app:set-repo <app> owner/name|url|path [--branch b]")
+	}
+	if err := state.ValidateRepo(p.Repo); err != nil {
+		return nil, err
+	}
+	if p.Branch != "" {
+		if err := state.ValidateRef("branch", p.Branch); err != nil {
+			return nil, err
+		}
+	}
+	old, err := d.Store.App(p.App)
+	if err != nil {
+		return nil, err
+	}
+	if old.Webhook.ID != 0 && old.IsGitHub() && d.githubToken() != "" {
+		if err := d.GitHubAPI(d.githubToken()).DeleteHook(ctx, old.Repo, old.Webhook.ID); err != nil {
+			fmt.Fprintf(out, "       warning: could not remove the webhook on github.com/%s: %v\n", old.Repo, err)
+		} else {
+			fmt.Fprintf(out, "-----> Removed webhook from github.com/%s\n", old.Repo)
+		}
+	}
+	live := ""
+	if rel := d.Store.CurrentRelease(p.App); rel != nil {
+		live = rel.SHA
+	}
+	var app *state.App
+	if err := d.updateApp(p.App, func(a *state.App) {
+		a.Repo = p.Repo
+		if p.Branch != "" {
+			a.Branch = p.Branch
+		}
+		a.Webhook = state.Webhook{Secret: randomHex(32)}
+		a.PollETag, a.LastSeen, a.Deliveries = "", live, nil
+		a.DeployKey = false
+		app = a
+	}); err != nil {
+		return nil, err
+	}
+	if err := gitx.EnsureMirror(ctx, d.Store.Path("apps", app.Name, "repo.git"), cloneURLOrEmpty(app)); err != nil {
+		return nil, err
+	}
+	d.installHook(app)
+	fmt.Fprintf(out, "-----> %s now deploys from %s@%s\n", app.Name, app.Repo, app.Branch)
+	hook := d.registerWebhook(ctx, d.cfg(), app, out)
+	return map[string]string{"app": app.Name, "repo": app.Repo, "branch": app.Branch, "webhook": hook}, nil
 }
 
 func cloneURLOrEmpty(a *state.App) string {

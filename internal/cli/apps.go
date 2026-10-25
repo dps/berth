@@ -484,6 +484,25 @@ func cmdSetKey() *cobra.Command {
 	}
 }
 
+func cmdSetRepo() *cobra.Command {
+	var branch string
+	c := &cobra.Command{
+		Use:     "app:set-repo <app> <owner/name|url|path>",
+		Short:   "Deploy an app from another repository or branch (keeps config, data and releases)",
+		Example: "  berth app:set-repo chirp dps/berth_chirp_node",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := appArg(args)
+			if err != nil {
+				return err
+			}
+			return call("app.setrepo", daemon.SetRepoParams{App: app, Repo: normalizeRepo(args[1]), Branch: branch}, nil)
+		},
+	}
+	c.Flags().StringVar(&branch, "branch", "", "branch to deploy (default: keep the current one)")
+	return c
+}
+
 func cmdDockerfile() *cobra.Command {
 	var ref string
 	c := &cobra.Command{

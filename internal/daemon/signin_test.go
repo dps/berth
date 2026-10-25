@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,5 +117,34 @@ func TestSignInHostRefusesNamesWithTheirOwnDNS(t *testing.T) {
 		if err := d.checkSignInHost(ctx, d.cfg(), bad); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+func TestSetRepoKeepsTheAppAndChangesTheSource(t *testing.T) {
+	d, _, repo := newTestDaemon(t)
+	ctx := context.Background()
+	b, _ := json.Marshal(CreateParams{Name: "web", Repo: repo, NoDeploy: true})
+	if _, err := d.hCreate(ctx, b, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := d.Store.App("web")
+	other := t.TempDir()
+	for _, bad := range []SetRepoParams{{App: "web", Repo: "--upload-pack=x"}, {App: "web", Repo: other, Branch: "-x"}, {App: "web"}} {
+		b, _ := json.Marshal(bad)
+		if _, err := d.hSetRepo(ctx, b, io.Discard); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	b, _ = json.Marshal(SetRepoParams{App: "web", Repo: other, Branch: "trunk"})
+	if _, err := d.hSetRepo(ctx, b, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := d.Store.App("web")
+	if a.Repo != other || a.Branch != "trunk" || a.Webhook.Secret == before.Webhook.Secret || a.CreatedAt != before.CreatedAt {
+		t.Fatalf("app after set-repo: %+v", a)
+	}
+	out, _ := exec.Command("git", "--git-dir", d.Store.Path("apps", "web", "repo.git"), "remote", "get-url", "origin").Output()
+	if strings.TrimSpace(string(out)) != other {
+		t.Fatalf("mirror origin %q", out)
 	}
 }

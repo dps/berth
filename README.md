@@ -176,6 +176,17 @@ berth create api --repo you/mono --path services/api             # build from a 
 
 A monorepo app deploys only when a push changes files under its path.
 
+To move an app to another repository or branch, say from a local folder to
+GitHub once you've pushed it there, keep the app and change its source:
+
+```bash
+berth app:set-repo myapp you/myapp [--branch main]
+```
+
+Config, databases, sign-in and releases stay as they are. Berth moves the
+webhook to the new repo and deploys again only when the branch moves past what
+is live.
+
 ### How deploys are triggered
 
 | Trigger | When it applies |
@@ -625,6 +636,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth dockerfile <app>` | print the Dockerfile Berth would use |
 | `berth git:remote <app> [--host h]` | add a `berth` remote for `git push berth` |
 | `berth app:set-key <app>` | use an SSH deploy key for this repo |
+| `berth app:set-repo <app> <repo> [--branch b]` | deploy from another repo or branch |
 | **Config** | |
 | `berth config:set <app> K=v … [--no-restart] [--build-arg]` | set variables and redeploy |
 | `berth config:unset <app> K …` | remove variables |

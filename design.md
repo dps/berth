@@ -372,6 +372,7 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth dockerfile <app>` | print the template Berth would use | — |
 | `berth git:remote <app> [--host h]` | add a `berth` SSH remote for push-to-deploy | built in |
 | `berth app:set-key <app>` | fetch over SSH with a generated deploy key | `git:*` |
+| `berth app:set-repo <app> <repo> [--branch b]` | change an app's source; keeps config, links and releases, moves the webhook, records the live sha so nothing redeploys | — |
 | `berth doctor` / `berth events` / `berth gc` / `berth backup` / `berth restore` | ops | — |
 | `berth reboot` | planned reboot that comes back unattended (`fdesetup authrestart`) | — |
 | `berth reload` | re-apply `~/.berth` to containers, Caddy and the tunnel after hand edits | — |
