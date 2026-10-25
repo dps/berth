@@ -407,7 +407,9 @@ berth cf:login mysite.com
 berth domains:add myapp www.mysite.com
 ```
 
-Berth creates the DNS record and updates the tunnel live, with no restart. For
+Berth creates the DNS record and updates the tunnel live, with no restart. It
+won't replace a record that already exists for the hostname (say, `www`
+pointing at another host) unless you add `--force`. For
 a domain whose DNS is elsewhere, `domains:add` prints the record to create
 (`www.mysite.com CNAME <tunnel-id>.cfargotunnel.com`); it must still be a
 Cloudflare-proxied zone for the tunnel to serve it.
@@ -547,7 +549,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth status [app]` | overview |
 | `berth events [-f]` | event log |
 | **Hostnames and access** | |
-| `berth domains:add \| remove \| list <app> [host]` | custom domains |
+| `berth domains:add \| remove \| list <app> [host] [--force]` | custom domains |
 | `berth auth:set <app> user:pass` · `berth auth:unset <app>` | basic auth |
 | **Storage and services** | |
 | `berth storage:mount \| unmount \| list <app> [path]` | persistent folders |

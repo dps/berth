@@ -198,6 +198,45 @@ func (c *CLI) FetchCredentials(ctx context.Context, name, credFile string) error
 	return err
 }
 
+// Token returns the tunnel's run token; `cloudflared tunnel run --token`
+// makes cloudflared follow the remotely managed configuration.
+func (c *CLI) Token(ctx context.Context, tunnel string) (string, error) {
+	out, err := c.run(ctx, "tunnel", "token", tunnel)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("cloudflared tunnel token: no output")
+	}
+	return fields[len(fields)-1], nil
+}
+
+// TokenPath is where Berth keeps a tunnel's run token.
+func TokenPath(secretsDir, tunnelID string) string {
+	return filepath.Join(secretsDir, "cloudflared", tunnelID+".token")
+}
+
+// RunningConfigVersion asks cloudflared's metrics server which ingress
+// version it is using: -1 means the local config file, >= 1 a remote one.
+func RunningConfigVersion(ctx context.Context, metricsAddr string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+metricsAddr+"/config", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var c struct {
+		Version int `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
+		return 0, err
+	}
+	return c.Version, nil
+}
+
 // RouteDNS points hostname (which must be in the origin cert's zone) at
 // the tunnel with a proxied CNAME.
 func (c *CLI) RouteDNS(ctx context.Context, tunnel, hostname string) error {
@@ -306,6 +345,15 @@ type dnsRecord struct {
 	Type    string `json:"type"`
 	Name    string `json:"name"`
 	Content string `json:"content"`
+}
+
+type DNSRecord = dnsRecord
+
+// Records lists the DNS records for one name.
+func (a *API) Records(ctx context.Context, zoneID, name string) ([]DNSRecord, error) {
+	var recs []dnsRecord
+	err := a.do(ctx, "GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(name), nil, &recs)
+	return recs, err
 }
 
 // UpsertCNAME points hostname at the tunnel (proxied).

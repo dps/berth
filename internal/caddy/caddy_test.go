@@ -13,9 +13,9 @@ func TestBuildRoutes(t *testing.T) {
 	cfg := Build(Options{
 		Admin: "127.0.0.1:2019", HTTPListen: "127.0.0.1:80", HTTPSListen: ":443", StorageDir: "/tmp/c",
 		Routes: []Route{
-			{App: "web", PublicHosts: []string{"web.example.com", "www.other.com"}, LANHosts: []string{"web.mini.local"}, Upstream: "127.0.0.1:8001", AccessLog: "/tmp/web.log"},
+			{App: "web", PublicHosts: []string{"web.example.com", "www.other.com"}, LANHosts: []string{"web.mini.local"}, Upstreams: []string{"127.0.0.1:8001", "127.0.0.1:8011"}, AccessLog: "/tmp/web.log"},
 			{App: "down", PublicHosts: []string{"down.example.com"}},
-			{App: "secret", LANHosts: []string{"secret.mini.local"}, Upstream: "127.0.0.1:8002", AuthUser: "u", AuthHash: "$2a$10$x"},
+			{App: "secret", LANHosts: []string{"secret.mini.local"}, Upstreams: []string{"127.0.0.1:8002"}, AuthUser: "u", AuthHash: "$2a$10$x"},
 		},
 	})
 	b, _ := json.Marshal(cfg)
@@ -23,7 +23,7 @@ func TestBuildRoutes(t *testing.T) {
 	for _, want := range []string{
 		`"dial":"127.0.0.1:8001"`, `"www.other.com"`, `"status_code":503`, `"status_code":404`,
 		`"http_basic"`, `"module":"internal"`, `"install_trust":false`, `"listen":["127.0.0.1:80"]`, `"listen":[":443"]`,
-		`"http.log.access.app-web"`, `"Cf-Connecting-Ip"`,
+		`"http.log.access.app-web"`, `"Cf-Connecting-Ip"`, `"policy":"first"`, `"dial":"127.0.0.1:8011"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config missing %s", want)

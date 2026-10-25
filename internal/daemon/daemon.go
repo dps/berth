@@ -173,8 +173,17 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if cfg.Tailscale && cfg.TailnetDomain != "" {
 			r.LANHosts = append(r.LANHosts, a.Name+"."+cfg.TailnetDomain)
 		}
-		if rel := d.Store.CurrentRelease(a.Name); rel != nil && !a.Stopped && rel.Container != "" && rel.Status == state.StatusRunning {
-			r.Upstream = fmt.Sprintf("127.0.0.1:%d", rel.HostPort)
+		// The upstreams depend only on the app's slots, never on which
+		// container is running, so deploys, restarts and crash recovery
+		// leave the Caddy config untouched.
+		if rel := d.Store.CurrentRelease(a.Name); rel != nil && !a.Stopped {
+			ports := a.Slots
+			if len(ports) == 0 {
+				ports = []int{rel.HostPort}
+			}
+			for _, p := range ports {
+				r.Upstreams = append(r.Upstreams, fmt.Sprintf("127.0.0.1:%d", p))
+			}
 		}
 		if a.Auth != nil {
 			r.AuthUser, r.AuthHash = a.Auth.User, a.Auth.Hash
@@ -230,13 +239,13 @@ func (d *Daemon) ApplyTunnel(ctx context.Context, restartOK bool) (restarted boo
 	if err := state.WriteFile(path, []byte(local), 0o600); err != nil {
 		return false, err
 	}
-	if tok := d.tunnelToken(cfg); tok != "" && cfg.CFAccountID != "" {
-		err := d.CloudflareAPI(tok).PutTunnelConfig(ctx, cfg.CFAccountID, cfg.TunnelID, rules)
-		if err == nil {
-			return false, nil
+	if cfg.TunnelRemote {
+		// cloudflared runs with the tunnel token and follows this live.
+		tok := d.tunnelToken(cfg)
+		if tok == "" {
+			return false, fmt.Errorf("no Cloudflare login for %s (berth init)", cfg.Domain)
 		}
-		// Fall back to the local config file and a cloudflared restart.
-		slog.Warn("remote tunnel config failed; using the local config file", "err", err)
+		return false, d.CloudflareAPI(tok).PutTunnelConfig(ctx, cfg.CFAccountID, cfg.TunnelID, rules)
 	}
 	if string(old) != local && restartOK && cfg.Launchd && launchd.Loaded(launchd.LabelCloudflared) {
 		return true, launchd.Restart(launchd.LabelCloudflared)

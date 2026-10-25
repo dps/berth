@@ -397,7 +397,16 @@ func (d *Daemon) hRestart(ctx context.Context, params json.RawMessage, out io.Wr
 		if errors.Is(err, deploy.ErrNothingToDeploy) {
 			return nil, fmt.Errorf("%s has no release yet; run `berth deploy %s`", p.App, p.App)
 		}
-		// A crashed app has no container to swap from; start it fresh.
+		// A crashed app has no container to swap from; start it fresh. Never
+		// do this while the current container is running: Recover replaces it.
+		rel := d.Store.CurrentRelease(p.App)
+		cs, lerr := d.RT.List(ctx)
+		if rel == nil || lerr != nil {
+			return nil, err
+		}
+		if c, ok := runtime.Find(cs, rel.Container); ok && c.Running() {
+			return nil, err
+		}
 		if err2 := d.Deployer.Recover(ctx, p.App); err2 != nil {
 			return nil, err
 		}
@@ -531,8 +540,9 @@ func (d *Daemon) redeployForConfig(ctx context.Context, app string, noRestart, r
 // ---- domains ----
 
 type DomainParams struct {
-	App  string `json:"app"`
-	Host string `json:"host"`
+	App   string `json:"app"`
+	Host  string `json:"host"`
+	Force bool   `json:"force,omitempty"` // replace an existing DNS record
 }
 
 func validHost(h string) error {
@@ -564,13 +574,15 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 			return nil, fmt.Errorf("%s is already attached to %s", p.Host, a.Name)
 		}
 	}
+	// DNS first: if the hostname already points somewhere, stop before
+	// changing anything.
+	if err := d.addDomainDNS(ctx, cfg, p.Host, p.Force, out); err != nil {
+		return nil, err
+	}
 	if err := d.updateApp(p.App, func(a *state.App) { a.Domains = append(a.Domains, p.Host) }); err != nil {
 		return nil, err
 	}
 	if err := d.Apply(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.addDomainDNS(ctx, cfg, p.Host, out); err != nil {
 		return nil, err
 	}
 	restarted, err := d.ApplyTunnel(ctx, true)
@@ -589,9 +601,27 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 // others) use `cloudflared tunnel route dns` with that zone's cert; a scoped
 // API token, if configured, covers any zone it can see; otherwise the
 // record to create is printed.
-func (d *Daemon) addDomainDNS(ctx context.Context, cfg *state.Config, host string, out io.Writer) error {
+func (d *Daemon) addDomainDNS(ctx context.Context, cfg *state.Config, host string, force bool, out io.Writer) error {
 	target := cfg.TunnelID + ".cfargotunnel.com"
+	// existing refuses to replace a record that points somewhere else.
+	existing := func(api *tunnel.API, zoneID string) error {
+		recs, err := api.Records(ctx, zoneID, host)
+		if err != nil || force {
+			return nil
+		}
+		for _, r := range recs {
+			if !(r.Type == "CNAME" && r.Content == target) {
+				return fmt.Errorf("%s already has a DNS record (%s %s); pass --force to replace it with the tunnel", host, r.Type, r.Content)
+			}
+		}
+		return nil
+	}
 	if zone, cert := tunnel.CertForHost(d.zoneCertDir(), host); cert != "" {
+		if oc, err := tunnel.ReadOriginCert(cert); err == nil {
+			if err := existing(d.CloudflareAPI(oc.APIToken), oc.ZoneID); err != nil {
+				return err
+			}
+		}
 		cli := &tunnel.CLI{Bin: runtime.LookBin("cloudflared"), Origin: cert}
 		if err := cli.RouteDNS(ctx, cfg.TunnelID, host); err != nil {
 			return err
@@ -602,6 +632,9 @@ func (d *Daemon) addDomainDNS(ctx context.Context, cfg *state.Config, host strin
 	if tok := d.cfToken(); tok != "" {
 		api := d.CloudflareAPI(tok)
 		if zone, err := api.ZoneFor(ctx, host); err == nil {
+			if err := existing(api, zone.ID); err != nil {
+				return err
+			}
 			if err := api.UpsertCNAME(ctx, zone.ID, host, target); err != nil {
 				return err
 			}

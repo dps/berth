@@ -65,6 +65,7 @@ type Config struct {
 	CFIPFilter    bool   `json:"cf_ip_filter,omitempty"`
 	TunnelID      string `json:"tunnel_id,omitempty"`
 	TunnelName    string `json:"tunnel_name,omitempty"`
+	TunnelRemote  bool   `json:"tunnel_remote,omitempty"` // cloudflared runs with the tunnel token and follows the remote ingress
 	CFAccountID   string `json:"cf_account_id,omitempty"`
 	CFZoneID      string `json:"cf_zone_id,omitempty"`
 	GitHubUser    string `json:"github_user,omitempty"`
@@ -169,6 +170,7 @@ type App struct {
 	Webhook    Webhook    `json:"webhook"`
 	Domains    []string   `json:"domains,omitempty"`
 	Mounts     []Mount    `json:"mounts,omitempty"`
+	Slots      []int      `json:"slots,omitempty"` // two fixed host ports; releases alternate between them
 	Links      []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
 	Auth       *BasicAuth `json:"auth,omitempty"`
 	DeployKey  bool       `json:"deploy_key,omitempty"`

@@ -23,7 +23,7 @@ type Route struct {
 	App         string
 	PublicHosts []string // reached through the tunnel (127.0.0.1:80 server)
 	LANHosts    []string // reached on the LAN (:443, internal CA)
-	Upstream    string   // 127.0.0.1:<port>; empty = app has no running release
+	Upstreams   []string // the app's two slot ports; empty = no release (503)
 	AuthUser    string
 	AuthHash    string // bcrypt
 	AccessLog   string
@@ -170,7 +170,7 @@ func handlers(r Route) []any {
 			}},
 		})
 	}
-	if r.Upstream == "" {
+	if len(r.Upstreams) == 0 {
 		return append(hs, obj{
 			"handler":     "static_response",
 			"status_code": 503,
@@ -181,10 +181,30 @@ func handlers(r Route) []any {
 		obj{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}, "prefer": []string{"zstd", "gzip"}},
 		obj{
 			"handler":   "reverse_proxy",
-			"upstreams": []any{obj{"dial": r.Upstream}},
+			"upstreams": dials(r.Upstreams),
+			// The first slot that accepts a connection gets the request. A
+			// deploy starts the new release in the idle slot and stops the old
+			// one; refused connections are retried on the other slot, so the
+			// route never changes and Caddy never reloads during a deploy.
+			"load_balancing": obj{
+				"selection_policy": obj{"policy": "first"},
+				"try_duration":     "5s",
+				"try_interval":     "50ms",
+			},
+			"health_checks": obj{"passive": obj{"fail_duration": "1s", "max_fails": 1}},
+			// No pooled connections to a release that may be stopping.
+			"transport": obj{"protocol": "http", "keep_alive": obj{"enabled": false}},
 		},
 	)
 	return hs
+}
+
+func dials(addrs []string) []any {
+	out := make([]any, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, obj{"dial": a})
+	}
+	return out
 }
 
 func portOf(addr string) int {

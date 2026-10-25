@@ -173,6 +173,16 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 	} else {
 		if tunnel.Ready(ctx, cfg.TunnelMetrics) {
 			add(Check{Name: "Cloudflare tunnel connected", Level: OK})
+			if v, err := tunnel.RunningConfigVersion(ctx, cfg.TunnelMetrics); err == nil {
+				switch {
+				case cfg.TunnelRemote && v < 1:
+					add(Check{Name: "tunnel ingress", Level: Fail, Detail: "cloudflared is using its local config, so custom domains won't update", Fix: "berth init (reinstalls cloudflared with the tunnel token)"})
+				case cfg.TunnelRemote:
+					add(Check{Name: "tunnel ingress", Level: OK, Detail: fmt.Sprintf("managed remotely (version %d)", v)})
+				default:
+					add(Check{Name: "tunnel ingress", Level: OK, Detail: "local config file"})
+				}
+			}
 		} else {
 			add(Check{Name: "Cloudflare tunnel connected", Level: Fail, Fix: fmt.Sprintf("launchctl kickstart -k gui/%d/%s; logs in %s", os.Getuid(), launchd.LabelCloudflared, d.Store.Path("logs"))})
 		}

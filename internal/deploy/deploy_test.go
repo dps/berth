@@ -142,6 +142,10 @@ func TestDeployOrdering(t *testing.T) {
 	if r2.HostPort == r1.HostPort {
 		t.Fatal("v2 must run side by side on a new port")
 	}
+	app, _ := h.store.App("web")
+	if len(app.Slots) != 2 || app.Slots[0] != r1.HostPort || app.Slots[1] != r2.HostPort {
+		t.Fatalf("releases must use the app's two slots: slots %v, ports %d %d", app.Slots, r1.HostPort, r2.HostPort)
+	}
 	// Ordering: build v2 → run v2 → (health) → route switch → stop v1.
 	calls := h.rt.CallLog("")
 	idx := func(prefix string) int {
@@ -235,6 +239,9 @@ func TestRollbackAndConfigRelease(t *testing.T) {
 	r3, err := h.d.Deploy(ctx, Request{App: "web", ReuseImage: true, Out: io.Discard})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if r3.HostPort != r1.HostPort {
+		t.Fatalf("v3 should reuse v1's slot %d, got %d", r1.HostPort, r3.HostPort)
 	}
 	if len(h.rt.CallLog("build")) != builds || r3.Image != r2.Image || r3.Env["GREETING"] != "hi" {
 		t.Fatalf("config release rebuilt or lost env: %+v", r3)
@@ -340,5 +347,34 @@ func TestMonorepoPathAndDockerfileOverride(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "using deploy/Dockerfile") {
 		t.Fatalf("override not used:\n%s", out.String())
+	}
+}
+
+// Back-to-back deploys inside the drain window must not run out of slots:
+// the draining release gives its slot up early.
+func TestRapidDeploysEndDrainEarly(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	env, _ := h.store.Env("web")
+	env["BERTH_DRAIN"] = "30"
+	h.store.SaveEnv("web", env)
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		if _, err := h.d.Deploy(ctx, Request{App: "web", ReuseImage: i > 0, Out: io.Discard}); err != nil {
+			t.Fatalf("deploy %d: %v", i+1, err)
+		}
+	}
+	if time.Since(start) > 20*time.Second {
+		t.Fatalf("deploys waited out the drain: %s", time.Since(start))
+	}
+	cs, _ := h.rt.List(ctx)
+	running := 0
+	for _, c := range cs {
+		if c.Running() {
+			running++
+		}
+	}
+	if running > 2 {
+		t.Fatalf("%d containers running; an app should never hold more than its two slots", running)
 	}
 }

@@ -50,6 +50,7 @@ type Deployer struct {
 	appLocks map[string]*sync.Mutex
 	portMu   sync.Mutex
 	busy     map[string]bool
+	draining map[int]*drainer // host port → old container finishing its drain
 }
 
 func New(store *state.Store, rt runtime.Runtime, router Router) *Deployer {
@@ -64,6 +65,7 @@ func New(store *state.Store, rt runtime.Runtime, router Router) *Deployer {
 		PortFree:       portFree,
 		appLocks:       map[string]*sync.Mutex{},
 		busy:           map[string]bool{},
+		draining:       map[int]*drainer{},
 	}
 }
 
@@ -356,7 +358,11 @@ func ContainerEnv(env state.Env) map[string]string {
 // then points traffic at it and retires the previous release.
 func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *state.Config, rel *state.Release, env state.Env, out io.Writer) error {
 	prev := d.Store.CurrentRelease(app.Name)
-	port, err := d.allocatePort(cfg)
+	avoid := 0
+	if prev != nil && prev.Container != "" {
+		avoid = prev.HostPort
+	}
+	port, err := d.pickSlot(app, cfg, avoid)
 	if err != nil {
 		return err
 	}
@@ -403,16 +409,34 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 	}
 	if prev != nil && prev.N != rel.N && prev.Container != "" {
 		drain := env.IntSetting(state.KeyDrain, 5)
-		say(out, "Switched traffic to v%d; stopping v%d in %ds", rel.N, prev.N, drain)
-		go d.retire(app.Name, prev.N, prev.Container, time.Duration(drain)*time.Second)
+		say(out, "v%d is live; v%d drains for %ds, then stops", rel.N, prev.N, drain)
+		go d.retire(app.Name, prev.N, prev.Container, prev.HostPort, time.Duration(drain)*time.Second)
 	}
 	return nil
 }
 
 // retire stops and removes an old container after the drain period. It
 // runs in the background so the CLI returns as soon as traffic has moved.
-func (d *Deployer) retire(app string, n int, container string, drain time.Duration) {
-	time.Sleep(drain)
+//
+// While it drains, the container still holds its slot; a deploy that needs
+// the slot ends the drain early (see pickSlot).
+func (d *Deployer) retire(app string, n int, container string, port int, drain time.Duration) {
+	dr := &drainer{early: make(chan struct{}), done: make(chan struct{})}
+	d.mu.Lock()
+	d.draining[port] = dr
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		if d.draining[port] == dr {
+			delete(d.draining, port)
+		}
+		d.mu.Unlock()
+		close(dr.done)
+	}()
+	select {
+	case <-time.After(drain):
+	case <-dr.early:
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	d.RT.Stop(ctx, container, 10*time.Second)
@@ -422,6 +446,29 @@ func (d *Deployer) retire(app string, n int, container string, drain time.Durati
 		r.Container = ""
 		d.Store.SaveRelease(app, r)
 	}
+}
+
+type drainer struct {
+	early chan struct{}
+	done  chan struct{}
+	once  sync.Once
+}
+
+// endDrain stops a draining container on port now, returning once the
+// port is released (or after a timeout).
+func (d *Deployer) endDrain(port int) bool {
+	d.mu.Lock()
+	dr := d.draining[port]
+	d.mu.Unlock()
+	if dr == nil {
+		return false
+	}
+	dr.once.Do(func() { close(dr.early) })
+	select {
+	case <-dr.done:
+	case <-time.After(30 * time.Second):
+	}
+	return true
 }
 
 // containerName is unique per start, so a release can be restarted
@@ -514,25 +561,67 @@ func (d *Deployer) lastLogs(ctx context.Context, container string, n int) string
 	return b.String()
 }
 
-func (d *Deployer) allocatePort(cfg *state.Config) (int, error) {
+// pickSlot returns the host port for a new container of app. Each app owns
+// two fixed ports and releases alternate between them, so Caddy's route
+// (both ports, "first available" with retries) never has to change during
+// a deploy: no config reload, so no dropped connections. avoid is the port
+// of the container being replaced.
+func (d *Deployer) pickSlot(app *state.App, cfg *state.Config, avoid int) (int, error) {
 	d.portMu.Lock()
 	defer d.portMu.Unlock()
+	if len(app.Slots) != 2 {
+		slots, err := d.allocateSlots(cfg)
+		if err != nil {
+			return 0, err
+		}
+		app.Slots = slots
+		if err := d.Store.SaveApp(app); err != nil {
+			return 0, err
+		}
+		if d.Router != nil {
+			d.Router.Apply(context.Background())
+		}
+	}
+	for _, p := range app.Slots {
+		if p != avoid && d.PortFree(p) {
+			return p, nil
+		}
+	}
+	// A release still draining from an earlier deploy may hold the slot we
+	// need: it is no longer current, so finish its drain now.
+	for _, p := range app.Slots {
+		if p != avoid && d.endDrain(p) && d.PortFree(p) {
+			return p, nil
+		}
+	}
+	return 0, fmt.Errorf("both of %s's ports (%d, %d) are in use; `berth restart %s` or check `lsof -i :%d`", app.Name, app.Slots[0], app.Slots[1], app.Name, app.Slots[0])
+}
+
+// allocateSlots finds two ports no app or running container uses.
+func (d *Deployer) allocateSlots(cfg *state.Config) ([]int, error) {
 	used := map[int]bool{}
 	apps, _ := d.Store.Apps()
 	for _, a := range apps {
+		for _, p := range a.Slots {
+			used[p] = true
+		}
 		rs, _ := d.Store.Releases(a.Name)
 		for _, r := range rs {
-			if r.Status == state.StatusRunning || r.Status == state.StatusStarting || r.Container != "" {
+			if r.Container != "" || r.Status == state.StatusRunning || r.Status == state.StatusStarting {
 				used[r.HostPort] = true
 			}
 		}
 	}
-	for p := cfg.PortMin; p <= cfg.PortMax; p++ {
+	var slots []int
+	for p := cfg.PortMin; p <= cfg.PortMax && len(slots) < 2; p++ {
 		if !used[p] && d.PortFree(p) {
-			return p, nil
+			slots = append(slots, p)
 		}
 	}
-	return 0, fmt.Errorf("no free host port in %d-%d", cfg.PortMin, cfg.PortMax)
+	if len(slots) < 2 {
+		return nil, fmt.Errorf("no free host ports left in %d-%d", cfg.PortMin, cfg.PortMax)
+	}
+	return slots, nil
 }
 
 func portFree(p int) bool {
@@ -646,7 +735,7 @@ func (d *Deployer) Restart(ctx context.Context, appName string, out io.Writer) e
 		return ErrNothingToDeploy
 	}
 	env, _ := d.Store.Env(appName)
-	old := rel.Container
+	old, oldPort := rel.Container, rel.HostPort
 	say(out, "Restarting %s v%d", appName, rel.N)
 	// startCheckSwap retires "prev", which is this same release; handle the
 	// old container ourselves.
@@ -655,20 +744,18 @@ func (d *Deployer) Restart(ctx context.Context, appName string, out io.Writer) e
 		return err
 	}
 	if old != "" && old != fresh.Container {
-		go func() {
-			time.Sleep(time.Duration(env.IntSetting(state.KeyDrain, 5)) * time.Second)
-			c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			d.RT.Stop(c, old, 10*time.Second)
-			d.RT.Remove(c, old)
-		}()
+		go d.retire(appName, rel.N, old, oldPort, time.Duration(env.IntSetting(state.KeyDrain, 5))*time.Second)
 	}
 	d.Event(state.Event{Kind: "restart", App: appName, Message: fmt.Sprintf("v%d restarted", rel.N)})
 	return nil
 }
 
 func (d *Deployer) startCheckSwapSame(ctx context.Context, app *state.App, cfg *state.Config, rel *state.Release, env state.Env, out io.Writer) error {
-	port, err := d.allocatePort(cfg)
+	avoid := 0
+	if rel.Container != "" {
+		avoid = rel.HostPort
+	}
+	port, err := d.pickSlot(app, cfg, avoid)
 	if err != nil {
 		return err
 	}

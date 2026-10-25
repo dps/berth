@@ -301,7 +301,8 @@ func dur(d time.Duration) string {
 // ---- domains ----
 
 func cmdDomainsAdd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	c := &cobra.Command{
 		Use:   "domains:add <app> <host>",
 		Short: "Serve an app on an extra hostname through the tunnel",
 		Args:  cobra.ExactArgs(2),
@@ -310,9 +311,11 @@ func cmdDomainsAdd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return call("domains.add", daemon.DomainParams{App: app, Host: args[1]}, nil)
+			return call("domains.add", daemon.DomainParams{App: app, Host: args[1], Force: force}, nil)
 		},
 	}
+	c.Flags().BoolVar(&force, "force", false, "replace an existing DNS record for the hostname")
+	return c
 }
 
 func cmdDomainsRemove() *cobra.Command {
@@ -411,7 +414,7 @@ func cmdStorageMount() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return call("storage.mount", daemon.StorageParams{App: app, Path: args[1], NoRestart: noRestart}, nil)
+			return configCall2("storage.mount", daemon.StorageParams{App: app, Path: args[1], NoRestart: noRestart})
 		},
 	}
 	c.Flags().BoolVar(&noRestart, "no-restart", false, "apply on the next deploy")
@@ -429,7 +432,7 @@ func cmdStorageUnmount() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return call("storage.unmount", daemon.StorageParams{App: app, Path: args[1], NoRestart: noRestart}, nil)
+			return configCall2("storage.unmount", daemon.StorageParams{App: app, Path: args[1], NoRestart: noRestart})
 		},
 	}
 	c.Flags().BoolVar(&noRestart, "no-restart", false, "apply on the next deploy")

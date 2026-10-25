@@ -312,6 +312,20 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 	if err := cli.RouteDNS(ctx, id, "*."+cfg.Domain); err != nil {
 		return err
 	}
+	// Remote management: publish the ingress now, and run cloudflared with
+	// the tunnel token so it follows later changes (custom domains) live.
+	// Without that, cloudflared uses the local config file and is restarted
+	// when it changes.
+	cfg.TunnelRemote = false
+	rules := tunnel.Ingress(cfg.Domain, cfg.WebhookAddr, cfg.CaddyHTTP, existingDomains(s))
+	if err := tunnel.NewAPI(oc.APIToken).PutTunnelConfig(ctx, cfg.CFAccountID, id, rules); err != nil {
+		note("remote tunnel configuration unavailable (%v); using a local config file", err)
+	} else if tok, err := cli.Token(ctx, id); err != nil {
+		note("could not get the tunnel token (%v); using a local config file", err)
+	} else if err := state.WriteFile(tunnel.TokenPath(s.SecretsDir(), id), []byte(tok+"\n"), 0o600); err == nil {
+		cfg.TunnelRemote = true
+		note("tunnel ingress is managed remotely: domain changes apply live")
+	}
 
 	// A scoped API token is optional; the browser login covers everything
 	// except the webhook IP filter (which needs Zone · WAF · Edit).
@@ -339,6 +353,18 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 		note("Cloudflare API token saved")
 	}
 	return nil
+}
+
+// existingDomains lists custom domains of existing apps (re-running init).
+func existingDomains(s *state.Store) []string {
+	apps, _ := s.Apps()
+	var out []string
+	for _, a := range apps {
+		if !a.Private {
+			out = append(out, a.Domains...)
+		}
+	}
+	return out
 }
 
 func zoneCertDir(s *state.Store) string { return filepath.Join(s.SecretsDir(), "cloudflared", "zones") }
@@ -450,7 +476,7 @@ func installAgents(s *state.Store, cfg *state.Config) error {
 	if !cfg.NoTunnel {
 		agents = append(agents, launchd.Agent{
 			Label: launchd.LabelCloudflared,
-			Args:  []string{runtime.LookBin("cloudflared"), "tunnel", "--config", s.Path("cloudflared.yml"), "--metrics", cfg.TunnelMetrics, "--no-autoupdate", "run", cfg.TunnelID},
+			Args:  cloudflaredArgs(s, cfg),
 			Env:   env,
 			Log:   s.Path("logs", "cloudflared.log"),
 		})
@@ -463,6 +489,14 @@ func installAgents(s *state.Store, cfg *state.Config) error {
 		note("%s", a.Label)
 	}
 	return nil
+}
+
+func cloudflaredArgs(s *state.Store, cfg *state.Config) []string {
+	bin := runtime.LookBin("cloudflared")
+	if cfg.TunnelRemote {
+		return []string{bin, "tunnel", "--metrics", cfg.TunnelMetrics, "--no-autoupdate", "run", "--token-file", tunnel.TokenPath(s.SecretsDir(), cfg.TunnelID)}
+	}
+	return []string{bin, "tunnel", "--config", s.Path("cloudflared.yml"), "--metrics", cfg.TunnelMetrics, "--no-autoupdate", "run", cfg.TunnelID}
 }
 
 func berthdPath() (string, error) {
