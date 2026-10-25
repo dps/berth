@@ -112,18 +112,32 @@ func printLive(res daemon.ReleaseResult) {
 }
 
 func cmdRollback() *cobra.Command {
-	return &cobra.Command{
+	var withData, yes bool
+	c := &cobra.Command{
 		Use:   "rollback <app> [n]",
-		Short: "Swap back to the previous release (or release n)",
+		Short: "Swap back to the previous release (or release n); --with-data restores its databases too",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := appArg(args)
 			if err != nil {
 				return err
 			}
-			p := daemon.AppParams{App: app}
+			p := daemon.AppParams{App: app, WithData: withData}
 			if len(args) == 2 {
 				fmt.Sscan(strings.TrimPrefix(args[1], "v"), &p.N)
+			}
+			if withData && !yes {
+				var plan daemon.DataPlan
+				if err := call("rollback.plan", p, &plan); err != nil {
+					return err
+				}
+				fmt.Printf("This puts %s back to v%d and replaces %s with the backup taken\n"+
+					"%s, just before v%d's release command ran. Writes since then are lost\n"+
+					"(the current data is saved first, so this can be undone).\n",
+					app, plan.Target, strings.Join(plan.Services, ", "), ago(plan.TakenAt), plan.From)
+				if !confirm("Roll back code and data?") {
+					return fmt.Errorf("cancelled")
+				}
 			}
 			var res daemon.ReleaseResult
 			if err := call("rollback", p, &res); err != nil {
@@ -135,6 +149,9 @@ func cmdRollback() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&withData, "with-data", false, "also restore the databases from before the later release's release command")
+	c.Flags().BoolVarP(&yes, "yes", "y", false, "don't ask for confirmation")
+	return c
 }
 
 func simpleAppCmd(use, short, method string, after func(app string)) *cobra.Command {

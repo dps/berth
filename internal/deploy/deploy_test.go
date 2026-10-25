@@ -248,7 +248,7 @@ func TestRollbackAndConfigRelease(t *testing.T) {
 	}
 	h.waitRetired(t, r2.Container)
 
-	rb, err := h.d.Rollback(ctx, "web", 0, io.Discard)
+	rb, err := h.d.Rollback(ctx, "web", 0, false, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestRollbackAndConfigRelease(t *testing.T) {
 	if rb.Env["GREETING"] != "" {
 		t.Fatal("rollback must use the release's own config snapshot")
 	}
-	if _, err := h.d.Rollback(ctx, "web", 2, io.Discard); err == nil {
+	if _, err := h.d.Rollback(ctx, "web", 2, false, io.Discard); err == nil {
 		t.Fatal("rollback to current should fail")
 	}
 }
@@ -292,7 +292,7 @@ func TestGCKeepsWindow(t *testing.T) {
 	if len(h.rt.CallLog("rmi berth/web:1")) != 1 {
 		t.Fatalf("image 1 not removed: %v", h.rt.CallLog("rmi"))
 	}
-	if _, err := h.d.Rollback(ctx, "web", 1, io.Discard); err == nil || !strings.Contains(err.Error(), "garbage-collected") {
+	if _, err := h.d.Rollback(ctx, "web", 1, false, io.Discard); err == nil || !strings.Contains(err.Error(), "garbage-collected") {
 		t.Fatalf("rollback to pruned: %v", err)
 	}
 }

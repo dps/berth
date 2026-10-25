@@ -20,7 +20,7 @@ import (
 func cmdLogs() *cobra.Command {
 	var follow, all, access bool
 	var n int
-	var since, build string
+	var since, build, release string
 	c := &cobra.Command{
 		Use:   "logs [app]",
 		Short: "Show app, build or access logs",
@@ -28,10 +28,23 @@ func cmdLogs() *cobra.Command {
 			"  berth logs myapp --since 1h\n" +
 			"  berth logs myapp --build        # latest build\n" +
 			"  berth logs myapp --build 12\n" +
+			"  berth logs myapp --release      # latest release command (migrations)\n" +
 			"  berth logs --all -f",
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := store()
+			// `--build 12`: a flag with an optional value leaves 12 as an arg.
+			if len(args) == 2 {
+				switch {
+				case build == "latest":
+					build = args[1]
+				case release == "latest":
+					release = args[1]
+				default:
+					return fmt.Errorf("unexpected argument %q", args[1])
+				}
+				args = args[:1]
+			}
 			var cutoff time.Time
 			if since != "" {
 				d, err := time.ParseDuration(since)
@@ -61,7 +74,13 @@ func cmdLogs() *cobra.Command {
 				}
 				switch {
 				case build != "":
-					p, err := buildLogPath(s.Path("apps", app, "logs"), build)
+					p, err := numberedLog(s.Path("apps", app, "logs"), "build", build)
+					if err != nil {
+						return err
+					}
+					srcs = append(srcs, src{"", p})
+				case release != "":
+					p, err := numberedLog(s.Path("apps", app, "logs"), "release", release)
 					if err != nil {
 						return err
 					}
@@ -130,6 +149,8 @@ func cmdLogs() *cobra.Command {
 	c.Flags().StringVar(&since, "since", "", "only lines newer than this (e.g. 10m, 1h)")
 	c.Flags().StringVar(&build, "build", "", "show a build log (latest, or release number)")
 	c.Flags().Lookup("build").NoOptDefVal = "latest"
+	c.Flags().StringVar(&release, "release", "", "show a release command's output (latest, or release number)")
+	c.Flags().Lookup("release").NoOptDefVal = "latest"
 	c.Flags().BoolVar(&access, "access", false, "show Caddy access logs")
 	c.Flags().BoolVar(&all, "all", false, "every app, prefixed with its name")
 	return c
@@ -142,24 +163,25 @@ func stripPrefix(l string) string {
 	return l
 }
 
-func buildLogPath(dir, which string) (string, error) {
+// numberedLog finds <kind>-<n>.log (build or release) in dir.
+func numberedLog(dir, kind, which string) (string, error) {
 	if which != "latest" {
 		n, err := strconv.Atoi(strings.TrimPrefix(which, "v"))
 		if err != nil {
-			return "", fmt.Errorf("--build takes a release number")
+			return "", fmt.Errorf("--%s takes a release number", kind)
 		}
-		return filepath.Join(dir, fmt.Sprintf("build-%d.log", n)), nil
+		return filepath.Join(dir, fmt.Sprintf("%s-%d.log", kind, n)), nil
 	}
-	matches, _ := filepath.Glob(filepath.Join(dir, "build-*.log"))
+	matches, _ := filepath.Glob(filepath.Join(dir, kind+"-*.log"))
 	best, bestN := "", -1
 	for _, m := range matches {
-		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), "build-"), ".log"))
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), kind+"-"), ".log"))
 		if err == nil && n > bestN {
 			best, bestN = m, n
 		}
 	}
 	if best == "" {
-		return "", fmt.Errorf("no build logs yet")
+		return "", fmt.Errorf("no %s logs yet", kind)
 	}
 	return best, nil
 }

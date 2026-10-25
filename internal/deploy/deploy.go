@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +39,11 @@ type Deployer struct {
 	GitAuth func(a *state.App) gitx.Auth
 	// Event records an event (events.log, notifications).
 	Event func(ev state.Event)
+	// Backup dumps the app's Postgres databases before a release command
+	// runs, returning "pg:name" → dump file.
+	Backup func(ctx context.Context, app *state.App, rel *state.Release, out io.Writer) (map[string]string, error)
+	// RestoreData loads those dumps back (rollback --with-data).
+	RestoreData func(ctx context.Context, app *state.App, backups map[string]string, out io.Writer) error
 
 	HealthInterval time.Duration
 	MinFreeBytes   uint64
@@ -170,7 +174,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 		if cur == nil {
 			return nil, ErrNothingToDeploy
 		}
-		rel.SHA, rel.Image, rel.Message = cur.SHA, cur.Image, cur.Message
+		rel.SHA, rel.Image, rel.Message, rel.ProcfileRelease = cur.SHA, cur.Image, cur.Message, cur.ProcfileRelease
 		say(out, "Releasing %s v%d (config change, image from v%d)", app.Name, n, cur.N)
 	} else {
 		start := time.Now()
@@ -181,6 +185,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 		}
 		defer os.RemoveAll(buildDir)
 		rel.SHA, rel.Message, rel.Image = sha, subject, state.ImageName(app.Name, n)
+		rel.ProcfileRelease = detect.ProcfileRelease(buildDir)
 		d.Event(state.Event{Kind: "deploy.start", App: app.Name, Message: fmt.Sprintf("v%d %s@%s (%s)", n, app.Branch, short(sha), req.Trigger)})
 		if err := d.Store.SaveRelease(app.Name, rel); err != nil {
 			return nil, err
@@ -194,14 +199,36 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 				d.Event(state.Event{Kind: "network", App: app.Name, Message: "containers have no outbound network: run `container system stop && container system start`"})
 				err = fmt.Errorf("containers can't reach the internet (see above)")
 			}
-			rel.Status, rel.Error = state.StatusFailed, err.Error()
+			rel.Status, rel.Error, rel.FailedStage = state.StatusFailed, err.Error(), "build"
 			d.Store.SaveRelease(app.Name, rel)
 			d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d build failed: %v", n, err)})
 			return rel, err
 		}
 		rel.BuildSecs = time.Since(start).Seconds()
+		if env.StrSetting(state.KeyRelease, rel.ProcfileRelease) == "" {
+			if tool, cmd := detect.MigrationHint(buildDir); tool != "" {
+				say(out, "This looks like %s. To run migrations before each release, add a Procfile line", tool)
+				detail(out, "  release: %s", cmd)
+				detail(out, "or `berth config:set %s %s=%q`", app.Name, state.KeyRelease, cmd)
+			}
+		}
 	}
 	rel.Env = ContainerEnv(env)
+	rel.ReleaseCmd = env.StrSetting(state.KeyRelease, rel.ProcfileRelease)
+	if err := d.release(ctx, app, cfg, rel, env, !req.ReuseImage, out); err != nil {
+		rel.Status, rel.Error, rel.FailedStage = state.StatusFailed, err.Error(), "release"
+		d.Store.SaveRelease(app.Name, rel)
+		d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d: %v", n, err)})
+		if prev := d.Store.CurrentRelease(app.Name); prev != nil && prev.Status == state.StatusRunning {
+			detail(out, "v%d is still serving traffic", prev.N)
+		}
+		for svc, f := range rel.Backups {
+			name := strings.TrimPrefix(svc, "pg:")
+			detail(out, "if it changed %s before failing, the backup from just before is", svc)
+			detail(out, "  berth pg:restore %s %s", name, f)
+		}
+		return rel, err
+	}
 	if err := d.startCheckSwap(ctx, app, cfg, rel, env, out); err != nil {
 		d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d: %v", n, err)})
 		return rel, err
@@ -410,14 +437,14 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 	}
 	say(out, "Starting %s on 127.0.0.1:%d", rel.Container, port)
 	if err := d.runContainer(ctx, app, cfg, rel, env); err != nil {
-		rel.Status, rel.Error = state.StatusFailed, err.Error()
+		rel.Status, rel.Error, rel.FailedStage = state.StatusFailed, err.Error(), "start"
 		d.Store.SaveRelease(app.Name, rel)
 		return err
 	}
 	if err := d.waitHealthy(ctx, rel, env, out); err != nil {
 		logs := d.lastLogs(ctx, rel.Container, 50)
 		d.RT.Remove(context.Background(), rel.Container)
-		rel.Status, rel.Error = state.StatusFailed, err.Error()
+		rel.Status, rel.Error, rel.FailedStage = state.StatusFailed, err.Error(), "start"
 		d.Store.SaveRelease(app.Name, rel)
 		if logs != "" {
 			fmt.Fprintf(out, "-----> Last log lines from %s:\n%s", rel.Container, indentString(logs))
@@ -542,6 +569,100 @@ func (d *Deployer) runContainer(ctx context.Context, app *state.App, cfg *state.
 		Init:    true,
 		Detach:  true,
 	})
+}
+
+// errorLine picks the line of a failed command's output most likely to
+// say what went wrong: the last one mentioning an error, else the last.
+func errorLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if strings.Contains(strings.ToLower(l), "error") || strings.Contains(l, "FATAL") {
+			return l
+		}
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// release runs the release command (migrations) in a one-off container
+// from the new image with the new release's config, before the new
+// release takes traffic. If it fails, the deploy stops and the current
+// release keeps serving. On production, a new build first gets a backup of
+// the app's Postgres databases (config-only releases rerun commands that
+// have already run, so they skip it).
+func (d *Deployer) release(ctx context.Context, app *state.App, cfg *state.Config, rel *state.Release, env state.Env, backup bool, out io.Writer) error {
+	if rel.ReleaseCmd == "" {
+		return nil
+	}
+	if backup && app.DevOf == "" && d.Backup != nil && env.StrSetting(state.KeyReleaseBackup, "on") != "off" {
+		b, err := d.Backup(ctx, app, rel, out)
+		if err != nil {
+			return fmt.Errorf("backup before the release command failed: %w (BERTH_RELEASE_BACKUP=off skips it)", err)
+		}
+		rel.Backups, rel.DataOf = b, d.Store.Current(app.Name)
+	}
+	rel.Status = state.StatusReleasing
+	if err := d.Store.SaveRelease(app.Name, rel); err != nil {
+		return err
+	}
+	timeout := time.Duration(env.IntSetting(state.KeyReleaseTimeout, 600)) * time.Second
+	say(out, "Running release command: %s", rel.ReleaseCmd)
+	logPath := d.Store.Path("apps", app.Name, "logs", fmt.Sprintf("release-%d.log", rel.N))
+	os.MkdirAll(filepath.Dir(logPath), 0o700)
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	envFile := d.Store.Path("apps", app.Name, "releases", fmt.Sprintf("%d.env", rel.N))
+	file, extra := state.Env(rel.Env).ContainerEnvFile()
+	if err := state.WriteFile(envFile, []byte(file), 0o600); err != nil {
+		return err
+	}
+	var vols []string
+	for _, m := range app.Mounts {
+		if err := os.MkdirAll(m.Source, 0o755); err != nil {
+			return err
+		}
+		vols = append(vols, m.Source+":"+m.Path)
+	}
+	name := state.ContainerName(app.Name, rel.N) + "-release"
+	d.RT.Remove(ctx, name)
+	tail := &tailWriter{max: 8 << 10}
+	w := io.MultiWriter(&capWriter{w: lf, left: maxBuildLog}, indent(out), tail)
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	start := time.Now()
+	err = d.RT.RunWith(rctx, runtime.RunOpts{
+		Name:       name,
+		Image:      rel.Image,
+		Network:    cfg.Network,
+		EnvFile:    envFile,
+		Env:        extra,
+		CPUs:       env.StrSetting(state.KeyCPUs, cfg.DefaultCPUs),
+		Memory:     env.StrSetting(state.KeyMemory, cfg.DefaultMemory),
+		Volumes:    vols,
+		Labels:     map[string]string{"dev.berth.app": app.Name, "dev.berth.release": strconv.Itoa(rel.N), "dev.berth.role": "release"},
+		Init:       true,
+		Remove:     true,
+		Entrypoint: "/bin/sh",
+		Args:       []string{"-c", rel.ReleaseCmd},
+		Stderr:     w,
+	}, nil, w)
+	rel.ReleaseSecs = time.Since(start).Seconds()
+	if err != nil {
+		// A timeout kills the CLI, not necessarily the container.
+		d.RT.Remove(context.Background(), name)
+		if rctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("release command timed out after %s (%s raises it)", timeout, state.KeyReleaseTimeout)
+		}
+		if line := errorLine(string(tail.b)); line != "" {
+			return fmt.Errorf("release command failed: %s", line)
+		}
+		return fmt.Errorf("release command failed: %v", err)
+	}
+	say(out, "Release command finished in %.1fs", rel.ReleaseSecs)
+	return nil
 }
 
 func (d *Deployer) waitHealthy(ctx context.Context, rel *state.Release, env state.Env, out io.Writer) error {
@@ -702,8 +823,11 @@ func HumanBytes(b int64) string {
 }
 
 // Rollback swaps back to release n, or to the newest release before the
-// current one that once ran successfully.
-func (d *Deployer) Rollback(ctx context.Context, appName string, n int, out io.Writer) (*state.Release, error) {
+// current one that once ran successfully. withData also restores the
+// databases from the backup taken while that release was current (just
+// before a later release's command ran), after the swap: old code copes
+// with a newer schema better than new code with an older one.
+func (d *Deployer) Rollback(ctx context.Context, appName string, n int, withData bool, out io.Writer) (*state.Release, error) {
 	unlock := d.Lock(appName)
 	defer unlock()
 	app, err := d.Store.App(appName)
@@ -714,6 +838,36 @@ func (d *Deployer) Rollback(ctx context.Context, appName string, n int, out io.W
 	if err != nil {
 		return nil, err
 	}
+	cur := d.Store.Current(appName)
+	target, err := d.RollbackTarget(appName, n)
+	if err != nil {
+		return nil, err
+	}
+	var data *state.Release
+	if withData {
+		if data, err = d.DataFor(appName, target.N); err != nil {
+			return nil, err
+		}
+	}
+	env, _ := d.Store.Env(appName)
+	say(out, "Rolling back %s to v%d (%s)", appName, target.N, short(target.SHA))
+	if err := d.startCheckSwap(ctx, app, cfg, target, env, out); err != nil {
+		return target, err
+	}
+	msg := fmt.Sprintf("v%d → v%d", cur, target.N)
+	if data != nil {
+		say(out, "Restoring the data as it was before v%d's release command (%s)", data.N, data.CreatedAt.Format("2006-01-02 15:04"))
+		if err := d.RestoreData(ctx, app, data.Backups, out); err != nil {
+			return target, fmt.Errorf("v%d is live but restoring its data failed: %w", target.N, err)
+		}
+		msg += fmt.Sprintf(" with data from before v%d", data.N)
+	}
+	d.Event(state.Event{Kind: "rollback", App: appName, Message: msg})
+	return target, nil
+}
+
+// RollbackTarget is the release `berth rollback app [n]` would swap to.
+func (d *Deployer) RollbackTarget(appName string, n int) (*state.Release, error) {
 	cur := d.Store.Current(appName)
 	rs, _ := d.Store.Releases(appName)
 	var target *state.Release
@@ -745,13 +899,28 @@ func (d *Deployer) Rollback(ctx context.Context, appName string, n int, out io.W
 	if target.Env == nil {
 		return nil, fmt.Errorf("v%d has no config snapshot", target.N)
 	}
-	env, _ := d.Store.Env(appName)
-	say(out, "Rolling back %s to v%d (%s)", appName, target.N, short(target.SHA))
-	if err := d.startCheckSwap(ctx, app, cfg, target, env, out); err != nil {
-		return target, err
-	}
-	d.Event(state.Event{Kind: "rollback", App: appName, Message: fmt.Sprintf("v%d → v%d", cur, target.N)})
 	return target, nil
+}
+
+// DataFor returns the newest release whose pre-release backups hold the
+// data as release n left it.
+func (d *Deployer) DataFor(appName string, n int) (*state.Release, error) {
+	if d.RestoreData == nil {
+		return nil, fmt.Errorf("restoring data isn't available")
+	}
+	rs, _ := d.Store.Releases(appName) // newest first
+	for _, r := range rs {
+		if r.DataOf != n || len(r.Backups) == 0 {
+			continue
+		}
+		for svc, f := range r.Backups {
+			if _, err := os.Stat(f); err != nil {
+				return nil, fmt.Errorf("v%d's backup of %s is gone (%s)", r.N, svc, f)
+			}
+		}
+		return r, nil
+	}
+	return nil, fmt.Errorf("no backup holds v%d's data: no release command ran while v%d was live, so a plain rollback (without --with-data) is enough", n, n)
 }
 
 // Restart starts a fresh container for the current release and swaps to it.
@@ -1003,20 +1172,29 @@ func (d *Deployer) gc(ctx context.Context, app *state.App, env state.Env, cfg *s
 			}
 		}
 	}
-	// Old build logs follow the same window.
-	logs, _ := filepath.Glob(d.Store.Path("apps", app.Name, "logs", "build-*.log"))
-	sort.Strings(logs)
-	for _, l := range logs {
-		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(l), "build-"), ".log"))
-		for _, r := range prune {
-			if r.N == n {
-				os.Remove(l)
-			}
+	// Old build and release-command logs follow the same window.
+	for _, r := range prune {
+		for _, kind := range []string{"build", "release"} {
+			os.Remove(d.Store.Path("apps", app.Name, "logs", fmt.Sprintf("%s-%d.log", kind, r.N)))
 		}
 	}
 }
 
 const maxBuildLog = 50 << 20
+
+// tailWriter keeps the last max bytes written.
+type tailWriter struct {
+	b   []byte
+	max int
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > t.max {
+		t.b = t.b[len(t.b)-t.max:]
+	}
+	return len(p), nil
+}
 
 // capWriter stops writing after a limit (build logs), noting the cut once.
 type capWriter struct {

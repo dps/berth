@@ -204,14 +204,23 @@ func TestDevBuildFailureIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha := snapshotInto(t, d, repo, "web")
-	for behaviour, stage := range map[string]string{"build error": "build", "unhealthy": "start"} {
+	// In order: the dev version exists (with its own env) by the last case.
+	for _, c := range [][2]string{{"build error", "build"}, {"unhealthy", "start"}, {"migration error", "release"}} {
+		behaviour, stage := c[0], c[1]
+		rt.RunWithHook = nil
+		if behaviour == "migration error" {
+			d.Store.SaveEnv("web-dev", state.Env{state.KeyRelease: "./migrate"})
+			rt.RunWithHook = func(o runtime.RunOpts, stdout io.Writer) error { return fmt.Errorf("exit status 1") }
+		}
 		rt.BuildHook = func(o runtime.BuildOpts) (string, error) {
 			if behaviour == "build error" {
 				return "", fmt.Errorf("npm ERR! missing script: build")
 			}
 			return behaviour, nil
 		}
-		d.Store.SaveEnv("web-dev", state.Env{state.KeyHealthTimeout: "1"})
+		if behaviour != "migration error" {
+			d.Store.SaveEnv("web-dev", state.Env{state.KeyHealthTimeout: "1"})
+		}
 		b, _ = json.Marshal(DevDeployParams{App: "web", Ref: sha})
 		out, err := d.hDevDeploy(ctx, b, io.Discard)
 		if err != nil {

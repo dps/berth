@@ -288,12 +288,13 @@ func (s *Store) Apps() ([]*App, error) {
 
 // Release statuses.
 const (
-	StatusBuilding = "building"
-	StatusStarting = "starting"
-	StatusRunning  = "running"
-	StatusFailed   = "failed"
-	StatusStopped  = "stopped" // superseded or stopped by the user
-	StatusCrashed  = "crashed"
+	StatusBuilding  = "building"
+	StatusReleasing = "releasing" // running the release command
+	StatusStarting  = "starting"
+	StatusRunning   = "running"
+	StatusFailed    = "failed"
+	StatusStopped   = "stopped" // superseded or stopped by the user
+	StatusCrashed   = "crashed"
 )
 
 // Release is apps/<app>/releases/<n>.json.
@@ -313,6 +314,18 @@ type Release struct {
 	StartedAt  time.Time         `json:"started_at,omitempty"`
 	BuildSecs  float64           `json:"build_secs,omitempty"`
 	RollbackOf int               `json:"rollback_of,omitempty"`
+	// FailedStage is build, release or start when Status is failed.
+	FailedStage string `json:"failed_stage,omitempty"`
+	// ReleaseCmd is the release command that ran before the swap
+	// (BERTH_RELEASE_COMMAND, else the Procfile's release: line, kept in
+	// ProcfileRelease so config-only releases can run it again).
+	ReleaseCmd      string  `json:"release_cmd,omitempty"`
+	ProcfileRelease string  `json:"procfile_release,omitempty"`
+	ReleaseSecs     float64 `json:"release_secs,omitempty"`
+	// Backups are the Postgres dumps taken just before the release command
+	// ran ("pg:name" → file), for `berth rollback --with-data`.
+	Backups map[string]string `json:"backups,omitempty"`
+	DataOf  int               `json:"data_of,omitempty"` // the release that was current when they were taken
 }
 
 // ContainerName is the per-release container name.

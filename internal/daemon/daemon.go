@@ -88,6 +88,8 @@ func New(store *state.Store, rt runtime.Runtime) *Daemon {
 	d.Deployer = deploy.New(store, rt, d)
 	d.Deployer.GitAuth = d.gitAuth
 	d.Deployer.Event = d.event
+	d.Deployer.Backup = d.releaseBackup
+	d.Deployer.RestoreData = d.restoreData
 	return d
 }
 

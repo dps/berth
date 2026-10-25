@@ -164,14 +164,17 @@ func Mask(v string) string {
 
 // Berth-controlled settings, read from the app env.
 const (
-	KeyDockerfile    = "BERTH_DOCKERFILE"
-	KeyHealthcheck   = "BERTH_HEALTHCHECK"
-	KeyHealthTimeout = "BERTH_HEALTH_TIMEOUT"
-	KeyDrain         = "BERTH_DRAIN"
-	KeyMemory        = "BERTH_MEMORY"
-	KeyCPUs          = "BERTH_CPUS"
-	KeyKeepReleases  = "BERTH_KEEP_RELEASES"
-	KeyPort          = "PORT"
+	KeyDockerfile     = "BERTH_DOCKERFILE"
+	KeyHealthcheck    = "BERTH_HEALTHCHECK"
+	KeyHealthTimeout  = "BERTH_HEALTH_TIMEOUT"
+	KeyDrain          = "BERTH_DRAIN"
+	KeyMemory         = "BERTH_MEMORY"
+	KeyCPUs           = "BERTH_CPUS"
+	KeyKeepReleases   = "BERTH_KEEP_RELEASES"
+	KeyRelease        = "BERTH_RELEASE_COMMAND"
+	KeyReleaseTimeout = "BERTH_RELEASE_TIMEOUT"
+	KeyReleaseBackup  = "BERTH_RELEASE_BACKUP"
+	KeyPort           = "PORT"
 )
 
 // IntSetting reads an integer BERTH_* setting with a default.

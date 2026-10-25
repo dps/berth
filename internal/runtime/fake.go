@@ -23,6 +23,8 @@ type Fake struct {
 	Calls      []string
 	BuildHook  func(o BuildOpts) (behaviour string, err error)
 	RunWithErr error // returned by RunWith (e.g. a failing network probe)
+	// RunWithHook, when set, runs in place of a foreground container.
+	RunWithHook func(o RunOpts, stdout io.Writer) error
 }
 
 type fakeContainer struct {
@@ -141,6 +143,9 @@ func (f *Fake) RunWith(ctx context.Context, o RunOpts, stdin io.Reader, stdout i
 	f.record("runwith " + o.Image + " " + strings.Join(o.Args, " "))
 	if f.RunWithErr != nil {
 		return f.RunWithErr
+	}
+	if f.RunWithHook != nil {
+		return f.RunWithHook(o, stdout)
 	}
 	if stdin != nil {
 		io.Copy(io.Discard, stdin)

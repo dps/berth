@@ -39,6 +39,7 @@ func (d *Daemon) handlers() map[string]handler {
 		"apps.destroy":    d.hDestroy,
 		"deploy":          d.hDeploy,
 		"rollback":        d.hRollback,
+		"rollback.plan":   d.hRollbackPlan,
 		"restart":         d.hRestart,
 		"stop":            d.hStop,
 		"start":           d.hStart,
@@ -363,6 +364,7 @@ type AppParams struct {
 	N        int    `json:"n,omitempty"`
 	NoCache  bool   `json:"no_cache,omitempty"`
 	KeepData bool   `json:"keep_data,omitempty"`
+	WithData bool   `json:"with_data,omitempty"` // rollback: restore the databases too
 	Trigger  string `json:"trigger,omitempty"`
 }
 
@@ -498,7 +500,7 @@ func (d *Daemon) hRollback(ctx context.Context, params json.RawMessage, out io.W
 	if err := decode(params, &p); err != nil {
 		return nil, err
 	}
-	rel, err := d.Deployer.Rollback(ctx, p.App, p.N, out)
+	rel, err := d.Deployer.Rollback(ctx, p.App, p.N, p.WithData, out)
 	if err != nil {
 		return nil, err
 	}

@@ -256,6 +256,9 @@ func (a *Apple) RunWith(ctx context.Context, o RunOpts, stdin io.Reader, stdout 
 	var errb tailBuffer
 	errb.max = 2048
 	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, &errb
+	if o.Stderr != nil {
+		c.Stderr = io.MultiWriter(&errb, o.Stderr)
+	}
 	if err := c.Run(); err != nil {
 		return fmt.Errorf("container run %s: %v: %s", o.Image, err, lastLine(errb.String()))
 	}

@@ -36,6 +36,7 @@ type RunOpts struct {
 	Args        []string
 	Interactive bool
 	TTY         bool
+	Stderr      io.Writer // RunWith: also copy the container's stderr here
 }
 
 type Container struct {

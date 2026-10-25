@@ -598,6 +598,88 @@ func (m *Manager) Backup(ctx context.Context, kind, name string, keep int) (stri
 	return path, nil
 }
 
+// ReleaseBackup dumps pg:name before app's release n runs its release
+// command, into backups/pg/<name>/releases/<app>/, keeping the newest keep.
+func (m *Manager) ReleaseBackup(ctx context.Context, name, app string, n, keep int) (string, error) {
+	sv, err := m.Store.Service("pg", name)
+	if err != nil {
+		return "", err
+	}
+	dir := m.Store.Path("backups", "pg", name, "releases", app)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-v%d.dump", time.Now().Format("20060102-150405"), n))
+	f, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	err = m.RT.Exec(ctx, state.ServiceContainer("pg", sv.Name), []string{"pg_dump", "-Fc", "-U", "postgres", dbName(name)}, false, false, nil, f, nil)
+	f.Close()
+	if err != nil {
+		os.Remove(path + ".tmp")
+		return "", fmt.Errorf("backup pg:%s: %w", name, err)
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		return "", err
+	}
+	if keep > 0 {
+		Prune(dir, keep)
+	}
+	return path, nil
+}
+
+// Replace swaps pg:name's database for the dump in file, exactly: the
+// database is dropped and recreated (so tables a migration added go too),
+// the links' grants are reapplied, and the dump is loaded owned by the
+// links' group. The current data is dumped first, so this can be undone.
+func (m *Manager) Replace(ctx context.Context, name, file string) (safety string, err error) {
+	safety, err = m.Backup(ctx, "pg", name, 0)
+	if err != nil {
+		return "", err
+	}
+	l := m.lock("pg", name)
+	l.Lock()
+	defer l.Unlock()
+	sv, err := m.Store.Service("pg", name)
+	if err != nil {
+		return safety, err
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return safety, err
+	}
+	defer f.Close()
+	db := dbName(name)
+	if err := m.psql(ctx, sv, "postgres", fmt.Sprintf("DROP DATABASE IF EXISTS %[1]s WITH (FORCE);\nCREATE DATABASE %[1]s;", quoteIdent(db))); err != nil {
+		return safety, err
+	}
+	// Production links first, then dev ones: a dev database's setup also
+	// revokes PUBLIC's CONNECT on the recreated production database.
+	apps := make([]string, 0, len(sv.Links))
+	for app := range sv.Links {
+		apps = append(apps, app)
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		di, dj := sv.Links[apps[i]].DB != "", sv.Links[apps[j]].DB != ""
+		return !di && dj || di == dj && apps[i] < apps[j]
+	})
+	for _, app := range apps {
+		if err := m.applyGrants(ctx, sv, sv.Links[app]); err != nil {
+			return safety, err
+		}
+	}
+	args := []string{"pg_restore", "-U", "postgres", "-d", db, "--no-owner", "--exit-on-error"}
+	if len(apps) > 0 {
+		args = append(args, "--role", db+"_rw")
+	}
+	var out bytes.Buffer
+	if err := m.RT.Exec(ctx, state.ServiceContainer("pg", name), args, true, false, f, &out, nil); err != nil {
+		return safety, fmt.Errorf("pg_restore: %v %s", err, strings.TrimSpace(out.String()))
+	}
+	return safety, nil
+}
+
 // Prune keeps the newest keep files in dir.
 func Prune(dir string, keep int) int {
 	entries, _ := os.ReadDir(dir)

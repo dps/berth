@@ -34,6 +34,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [Configuration](#configuration)
 - [Logs, status and events](#logs-status-and-events)
 - [Databases: Postgres and Redis](#databases-postgres-and-redis)
+- [Database migrations](#database-migrations)
 - [Persistent storage](#persistent-storage)
 - [Hostnames, custom domains and access control](#hostnames-custom-domains-and-access-control)
 - [Sign in with Google](#sign-in-with-google)
@@ -248,9 +249,11 @@ berth stop myapp              # stop it; the URL answers 503
 berth start myapp
 ```
 
-A rollback restores that release's code *and* its configuration. Berth keeps
-the images of the last 5 releases; older ones are garbage-collected and can be
-redeployed by commit with `berth deploy myapp --ref <sha>`.
+A rollback restores that release's code *and* its configuration, not its
+data; if a migration changed the database, see
+[rolling back data](#rolling-back-data). Berth keeps the images of the last 5
+releases; older ones are garbage-collected and can be redeployed by commit
+with `berth deploy myapp --ref <sha>`.
 
 ## Configuration
 
@@ -290,6 +293,9 @@ Variables starting with `BERTH_` tune Berth itself and are not passed to your ap
 | `BERTH_CPUS` | `1` | CPU limit |
 | `BERTH_KEEP_RELEASES` | `5` | release images kept for rollback |
 | `BERTH_DOCKERFILE` | — | Dockerfile path within the repo (or the `--path` subdirectory) |
+| `BERTH_RELEASE_COMMAND` | Procfile `release:` | command run before each release, e.g. migrations ([more](#database-migrations)) |
+| `BERTH_RELEASE_TIMEOUT` | `600` | seconds the release command may take |
+| `BERTH_RELEASE_BACKUP` | `on` | `off` skips the Postgres backup before the release command |
 | `PORT` | `8080` | the port your app listens on inside its container |
 
 ## Logs, status and events
@@ -299,6 +305,7 @@ berth logs myapp                   # last 200 lines
 berth logs myapp -f                # follow
 berth logs myapp --since 30m -n 1000
 berth logs myapp --build           # the latest build's output (or --build 12)
+berth logs myapp --release         # the latest release command's output (migrations)
 berth logs myapp --access          # one line per HTTP request
 berth logs --all -f                # every app, prefixed with its name
 ```
@@ -375,6 +382,100 @@ berth redis:restore cache ~/.berth/backups/redis/cache/<time>.rdb
 
 `pg:create` and `redis:create` take `--memory` (defaults `512M` and `256M`)
 and `--image` (for example `--image postgres:16`).
+
+## Database migrations
+
+Tell Berth how your app migrates its database, and it runs that command once
+per release, after the build and before the new code takes any traffic. Add
+a `Procfile` to the repo with a `release:` line:
+
+```
+release: npx prisma migrate deploy
+```
+
+Any migration tool works: `alembic upgrade head`, `python manage.py migrate
+--noinput`, `bin/rails db:migrate`, `npx knex migrate:latest`, or your own
+script. (Berth reads only the `release:` line; your app still starts the way
+it always has.) Without a Procfile, set it as config instead:
+`berth config:set myapp BERTH_RELEASE_COMMAND="alembic upgrade head"`.
+
+On every deploy Berth then:
+
+1. backs up each Postgres database the app is linked to;
+2. runs the command in a fresh container from the new image, with the new
+   release's config (so `DATABASE_URL` and your other settings are there),
+   streaming its output;
+3. starts the new release only if the command succeeded. If it fails, the
+   deploy stops, the running version keeps serving, and the output shows the
+   error and where the backup is.
+
+```
+-----> Backed up pg:chirpdb before the release command (0.2s, 5.1 KB)
+-----> Running release command: node migrate.js
+       applied 004_add_mood (3ms)
+       1 migration(s) applied
+-----> Release command finished in 0.8s
+-----> Starting berth-chirp-5-k2x9 on 127.0.0.1:8002
+```
+
+`berth logs myapp --release` shows the latest run's output. If your app
+creates its tables when it starts up, move that into the release command:
+otherwise a half-finished migration leaves a crashing container and nothing
+to undo it with. Config changes (`config:set`, `pg:link`) run the command
+again, so it must be safe to repeat; every migration tool's "apply what's
+pending" command is.
+
+When Berth spots a migration tool (Prisma, Drizzle, Knex, Alembic, Django,
+Rails) and no release command, the deploy prints the line to add. It never
+runs migrations you didn't ask for.
+
+### Write migrations the old code can live with
+
+Deploys have no downtime: the old release keeps serving while the new one
+starts, then for a few seconds more, all against the migrated database. So
+each migration has to work with both the old code and the new:
+
+- **Adding** a column or table is safe. Make new columns nullable or give
+  them a default.
+- **Removing** takes two releases: first stop using the column, then drop it
+  in a later release.
+- **Renaming** is add, copy, switch the code over, then drop.
+
+### Try it on the dev version first
+
+The [dev version](#dev-versions-for-agents) runs the release command against
+its own database, so a migration can be tried before it's committed:
+
+```bash
+berth dev:db:copy myapp     # copy production's data into the dev database, then migrate it
+berth dev:push              # build your working tree, run the release command, start it
+```
+
+`dev:push` exits with code 3 when the release command fails, with the error in
+its output (and in `--json`). This is the loop to give an agent: write the
+migration, `dev:push`, fix until it exits 0, then commit.
+
+### Rolling back data
+
+The backup taken before each release command lets you undo a migration along
+with the code:
+
+```bash
+berth rollback myapp --with-data
+```
+
+This swaps back to the previous release, then replaces the database with the
+backup taken just before the newer release's migration ran. Tables and
+columns the migration added are gone afterwards. Anything written since
+then is lost, so Berth asks first and saves the current data to
+`~/.berth/backups/pg/<db>/` before restoring. Without `--with-data`, a
+rollback leaves the data alone, which is right whenever the migration was
+backward-compatible.
+
+The last 14 pre-release backups per app are kept in
+`~/.berth/backups/pg/<db>/releases/<app>/`. If a database is too big to dump
+on every deploy, `berth config:set myapp BERTH_RELEASE_BACKUP=off` skips it
+(and `--with-data` then has nothing to restore).
 
 ## Persistent storage
 
@@ -538,6 +639,7 @@ For agents, `dev:push` is synchronous and scriptable:
 | 0 | live |
 | 1 | the build failed (its output is above) |
 | 2 | the app built but failed to start (its last log lines are above) |
+| 3 | the [release command](#database-migrations) failed, e.g. a migration |
 
 `--json` prints the result (`status`, `stage`, `url`, `release`, the base
 commit and a summary of uncommitted changes) on stdout, with progress on
@@ -569,7 +671,8 @@ A dev version never sees production's data:
 
 - **Postgres:** it gets its own database (`<db>_dev`) in the same Postgres,
   with a login that can't connect to production's database. It starts empty.
-  `berth dev:db:copy myapp` replaces it with a copy of production's.
+  `berth dev:db:copy myapp` replaces it with a copy of production's and runs
+  the app's [release command](#database-migrations) on it.
 - **Redis:** it gets its own small Redis.
 - **Storage mounts:** its own folders.
 - **Config:** copied from the app when the dev version is first created,
@@ -712,7 +815,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | **Apps** | |
 | `berth create <app> [--repo r] [--branch b] [--path p] [--private] [--no-webhook] [--no-deploy]` | register and deploy an app |
 | `berth deploy <app> [--ref r] [--no-cache]` | build and release now |
-| `berth rollback <app> [n]` | back to the previous (or nth) release |
+| `berth rollback <app> [n] [--with-data]` | back to the previous (or nth) release; `--with-data` also restores its databases |
 | `berth restart \| stop \| start <app>` | lifecycle |
 | `berth releases <app>` | release history |
 | `berth destroy <app> [--keep-data]` | delete an app, its webhook and images |
@@ -727,7 +830,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth config:show <app> [--reveal] [--shell]` | list variables |
 | `berth config:import <app> <file> [--replace]` | load a `.env` file |
 | **Logs** | |
-| `berth logs <app> [-f] [-n N] [--since d] [--build [n]] [--access]` | app, build or access logs |
+| `berth logs <app> [-f] [-n N] [--since d] [--build [n]] [--release [n]] [--access]` | app, build, release-command or access logs |
 | `berth logs --all [-f]` | every app's logs |
 | `berth status [app]` | overview |
 | `berth events [-f]` | event log |
@@ -807,7 +910,7 @@ work. Each README lists the `berth` commands to deploy it.
 | Repo | Stack | Shows |
 | --- | --- | --- |
 | [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, storage mounts, crash recovery |
-| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres with Google sign-in; build step, client-side routes |
+| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres with Google sign-in and migrations; build step, client-side routes |
 | [berth_hello_go](https://github.com/dps/berth_hello_go) | Go standard library | static binary on Alpine |
 | [berth_hello_rust](https://github.com/dps/berth_hello_rust) | Rust + axum | cached dependency builds (4 s redeploys) |
 

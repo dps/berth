@@ -162,7 +162,7 @@ type DevDeployResult struct {
 	Dev       string  `json:"dev"`
 	Release   int     `json:"release,omitempty"`
 	Status    string  `json:"status"`          // live | failed
-	Stage     string  `json:"stage,omitempty"` // build | start, when failed
+	Stage     string  `json:"stage,omitempty"` // build | release | start, when failed
 	URL       string  `json:"url"`
 	SHA       string  `json:"sha,omitempty"`
 	Base      string  `json:"base,omitempty"`
@@ -203,8 +203,8 @@ func (d *Daemon) hDevDeploy(ctx context.Context, params json.RawMessage, out io.
 	}
 	if err != nil {
 		res.Status, res.Error, res.Stage = "failed", err.Error(), "build"
-		if rel != nil && rel.Container != "" {
-			res.Stage = "start"
+		if rel != nil && rel.FailedStage != "" {
+			res.Stage = rel.FailedStage
 		}
 		return res, nil
 	}
@@ -340,9 +340,11 @@ func (d *Daemon) hDevDBCopy(ctx context.Context, params json.RawMessage, out io.
 	if copied == 0 {
 		return nil, fmt.Errorf("%s has no Postgres to copy", p.App)
 	}
+	// A new release on the same image, not a restart: the copy has
+	// production's schema, so the release command (migrations) runs again.
 	if d.Store.CurrentRelease(dev.Name) != nil {
-		if err := d.Deployer.Restart(ctx, dev.Name, out); err != nil {
-			fmt.Fprintf(out, "       warning: restart %s: %v\n", dev.Name, err)
+		if _, err := d.Deployer.Deploy(ctx, deploy.Request{App: dev.Name, ReuseImage: true, Trigger: "db-copy", Out: out}); err != nil {
+			fmt.Fprintf(out, "       warning: redeploy %s: %v\n", dev.Name, err)
 		}
 	}
 	return map[string]any{"app": p.App, "copied": copied}, nil

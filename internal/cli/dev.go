@@ -185,7 +185,7 @@ func cmdDevPush() *cobra.Command {
 		Short: "Deploy this working tree (uncommitted changes too) to https://<app>-dev.<domain>",
 		Long: "Snapshots the repo exactly as it is on disk (tracked and untracked files; .gitignore respected),\n" +
 			"without touching your branch, index or stash, and deploys it to the app's dev version.\n" +
-			"Exit codes: 0 live, 1 build failed, 2 the app failed to start.",
+			"Exit codes: 0 live, 1 build failed, 2 the app failed to start, 3 the release command (migrations) failed.",
 		Example: "  berth dev:push            # in the app's repo\n  berth dev:push chirp --json",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -263,8 +263,11 @@ func reportDev(res daemon.DevDeployResult) error {
 	code := 0
 	if res.Status != "live" {
 		code = 1
-		if res.Stage == "start" {
+		switch res.Stage {
+		case "start":
 			code = 2
+		case "release":
+			code = 3
 		}
 	}
 	if jsonOut {
@@ -273,15 +276,22 @@ func reportDev(res daemon.DevDeployResult) error {
 		fmt.Printf("=====> %s v%d is live at %s\n", res.Dev, res.Release, res.URL)
 	} else {
 		what := "build failed"
-		if code == 2 {
+		switch code {
+		case 2:
 			what = "the app failed to start"
+		case 3:
+			what = "the release command failed"
 		}
 		msg := res.Error
 		if !strings.HasPrefix(msg, what) {
 			msg = what + ": " + msg
 		}
 		fmt.Fprintf(os.Stderr, " !     %s v%d: %s\n", res.Dev, res.Release, msg)
-		fmt.Fprintf(os.Stderr, " !     see `berth logs %s --build` and `berth logs %s`\n", res.Dev, res.Dev)
+		if code == 3 {
+			fmt.Fprintf(os.Stderr, " !     see `berth logs %s --release`\n", res.Dev)
+		} else {
+			fmt.Fprintf(os.Stderr, " !     see `berth logs %s --build` and `berth logs %s`\n", res.Dev, res.Dev)
+		}
 	}
 	if code != 0 {
 		return &silentExit{code: code}
@@ -449,13 +459,19 @@ its branch. To try changes before committing, use its dev version:
 
 - Deploy the working tree, uncommitted changes included: `+"`berth dev:push`"+`
   (add `+"`--json`"+` for a structured result). Exit code 0 = live, 1 = build failed,
-  2 = the app failed to start; build output and app logs are printed on failure.
+  2 = the app failed to start, 3 = the release command (migrations) failed; the
+  output on failure says why.
 - Dev URL: %[2]s
   It needs a token: `+"`curl -H \"Authorization: Bearer $BERTH_DEV_TOKEN\" %[2]s/...`"+`.
   If BERTH_DEV_TOKEN isn't set, ask the user to run
   `+"`berth dev:token %[1]s --as test@example.com`"+` (requests are then signed in as that test user).
-- Logs: `+"`berth logs %[3]s -n 200`"+` (`+"`--build`"+` for the last build). One-off commands
-  such as migrations: `+"`berth run %[3]s <command>`"+`. Config: `+"`berth config:set %[3]s KEY=value`"+`.
+- Logs: `+"`berth logs %[3]s -n 200`"+` (`+"`--build`"+` for the last build, `+"`--release`"+` for the
+  last release command). One-off commands: `+"`berth run %[3]s <command>`"+`.
+  Config: `+"`berth config:set %[3]s KEY=value`"+`.
+- Schema changes are migrations run by the Procfile's `+"`release:`"+` command on every deploy,
+  before the new code takes traffic. Add a migration, then `+"`berth dev:push`"+` to run it on
+  the dev database. While a deploy swaps over, the old code runs against the new schema,
+  so add columns before using them and drop them only a release after the code stops.
 - The dev version has its own database, separate from production's.
   `+"`berth dev:reset %[1]s`"+` starts it over; `+"`berth dev:db:copy %[1]s -y`"+` loads a copy of production's data.
 - Never push to the production branch just to test something.
