@@ -227,6 +227,11 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 		add(Check{Name: "GitHub token", Level: Warn, Detail: "none: only public repos, no webhooks", Fix: "berth init --github-token <token>"})
 	}
 
+	// AI gateway.
+	if d.Store.AIConfigured() {
+		cs = append(cs, d.aiChecks(ctx, cfg)...)
+	}
+
 	// Disk.
 	if free, err := deploy.FreeBytes(d.Store.Root); err == nil {
 		lvl := OK
@@ -372,4 +377,44 @@ func hubDigest(ctx context.Context, c *http.Client, repo, tag string) (string, e
 		return "", fmt.Errorf("registry: %s", resp.Status)
 	}
 	return resp.Header.Get("Docker-Content-Digest"), nil
+}
+
+// aiChecks: the gateway answers through Caddy, and Ollama answers if an
+// alias uses a local model.
+func (d *Doctor) aiChecks(ctx context.Context, cfg *state.Config) []Check {
+	var cs []Check
+	client := &http.Client{Timeout: 3 * time.Second}
+	if resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", cfg.AIPort)); err == nil && resp.StatusCode == 200 {
+		resp.Body.Close()
+		cs = append(cs, Check{Name: "AI gateway", Level: OK, Detail: fmt.Sprintf("apps reach it at http://%s:%d", cfg.Gateway, cfg.AIPort)})
+	} else {
+		detail := fmt.Sprint(err)
+		if err == nil {
+			resp.Body.Close()
+			detail = resp.Status
+		}
+		cs = append(cs, Check{Name: "AI gateway", Level: Fail, Detail: detail, Fix: "berth reload (Caddy serves the gateway port; is ai_port free?)"})
+	}
+	ac, err := d.Store.AIConfig()
+	if err != nil {
+		return cs
+	}
+	local := false
+	for _, to := range ac.Aliases {
+		local = local || strings.HasPrefix(to, "local/")
+	}
+	if !local {
+		return cs
+	}
+	base := ac.OllamaURL
+	if base == "" {
+		base = "http://127.0.0.1:11434"
+	}
+	if resp, err := client.Get(strings.TrimSuffix(base, "/") + "/api/version"); err == nil {
+		resp.Body.Close()
+		cs = append(cs, Check{Name: "Ollama", Level: OK, Detail: base})
+	} else {
+		cs = append(cs, Check{Name: "Ollama", Level: Fail, Detail: err.Error(), Fix: "brew services start ollama (or open Ollama.app)"})
+	}
+	return cs
 }

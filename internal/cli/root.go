@@ -114,6 +114,8 @@ func NewRoot() *cobra.Command {
 	add("dev", cmdDevPush(), cmdDevToken(), cmdDevDBCopy(), cmdDevReset(), cmdDevAgents(), cmdDevOnOff(true), cmdDevOnOff(false), cmdDevDeploy())
 	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in:"})
 	add("signin", cmdAuthSetup(), cmdAuthStatus(), cmdAuthGroup(), cmdAuthSessions(), cmdAuthRevoke())
+	root.AddGroup(&cobra.Group{ID: "ai", Title: "AI gateway:"})
+	add("ai", cmdAISetup(), cmdAIStatus(), cmdAIModels(), cmdAIKey(), cmdAIAlias(), cmdAIPull(), cmdAIEnable(), cmdAIDisable(), cmdAIUsage())
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),

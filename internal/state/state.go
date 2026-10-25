@@ -79,6 +79,8 @@ type Config struct {
 	TunnelMetrics  string `json:"tunnel_metrics"` // cloudflared --metrics
 	DNSAddr        string `json:"dns_addr"`       // berthd\'s SRV responder for Caddy upstreams
 	AuthAddr       string `json:"auth_addr"`      // berthd's sign-in server, behind Caddy
+	AIAddr         string `json:"ai_addr"`        // berthd's AI gateway, behind Caddy
+	AIPort         int    `json:"ai_port"`        // where apps reach the AI gateway on the berth network gateway
 	PortMin        int    `json:"port_min"`
 	PortMax        int    `json:"port_max"`
 	ServicePortMin int    `json:"service_port_min"`
@@ -107,6 +109,8 @@ func DefaultConfig() *Config {
 		TunnelMetrics:   "127.0.0.1:20241",
 		DNSAddr:         "127.0.0.1:7753",
 		AuthAddr:        "127.0.0.1:7781",
+		AIAddr:          "127.0.0.1:7782",
+		AIPort:          7790,
 		PortMin:         8001,
 		PortMax:         8999,
 		ServicePortMin:  6001,
@@ -197,6 +201,7 @@ type App struct {
 	DevOf      string     `json:"dev_of,omitempty"` // set on <app>-dev: the app it is the dev version of
 	DevOff     bool       `json:"dev_off,omitempty"`
 	DevTokens  []DevToken `json:"dev_tokens,omitempty"` // bearer tokens for the dev version (hashes)
+	AI         *AppAI     `json:"ai,omitempty"`         // access to the AI gateway
 	DeployKey  bool       `json:"deploy_key,omitempty"`
 	Stopped    bool       `json:"stopped,omitempty"`
 	PollETag   string     `json:"poll_etag,omitempty"`

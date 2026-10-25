@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dps/berth/internal/ai"
 	"github.com/dps/berth/internal/auth"
 	"github.com/dps/berth/internal/caddy"
 	"github.com/dps/berth/internal/deploy"
@@ -64,6 +65,7 @@ type Daemon struct {
 	cfMu          sync.Mutex
 	lastTunnelCfg string
 	auth          *auth.Server // sign-in; nil until Run
+	ai            *ai.Gateway  // AI gateway; nil until Run
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -236,6 +238,7 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		d.auth.SetSites(sites)
 		authHost = d.signInHost(cfg)
 	}
+	aiListen, aiSources := d.configureAI(cfg, apps)
 	conf := caddy.Build(caddy.Options{
 		Admin:       cfg.CaddyAdmin,
 		HTTPListen:  cfg.CaddyHTTP,
@@ -246,6 +249,9 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		AuthAddr:    cfg.AuthAddr,
 		AuthHost:    authHost,
 		IDHeaders:   auth.Headers,
+		AIListen:    aiListen,
+		AIAddr:      cfg.AIAddr,
+		AISources:   aiSources,
 		StorageDir:  d.Store.Path("caddy"),
 		Routes:      routes,
 	})
@@ -355,6 +361,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer authSrv.Close()
+	aiSrv, err := d.startAI(cfg)
+	if err != nil {
+		ln.Close()
+		hookLn.Close()
+		return err
+	}
+	defer aiSrv.Close()
 	slog.Info("berthd started", "version", Version, "home", d.Store.Root, "socket", sock, "webhooks", cfg.WebhookAddr)
 
 	go func() {
@@ -478,9 +491,13 @@ func (d *Daemon) relinkGateway(ctx context.Context, oldGW, newGW string) {
 		}
 		changed := false
 		for k, v := range env {
-			if strings.Contains(v, "@"+oldGW+":") {
-				env[k] = strings.ReplaceAll(v, "@"+oldGW+":", "@"+newGW+":")
-				changed = true
+			// Service URLs (user:pass@gw:port) and the AI gateway's (http://gw:port).
+			for _, sep := range []string{"@", "//"} {
+				if strings.Contains(v, sep+oldGW+":") {
+					v = strings.ReplaceAll(v, sep+oldGW+":", sep+newGW+":")
+					env[k] = v
+					changed = true
+				}
 			}
 		}
 		if changed {

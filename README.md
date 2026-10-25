@@ -39,6 +39,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [Hostnames, custom domains and access control](#hostnames-custom-domains-and-access-control)
 - [Sign in with Google](#sign-in-with-google)
 - [Dev versions for agents](#dev-versions-for-agents)
+- [AI for your apps](#ai-for-your-apps)
 - [One-off commands and shells](#one-off-commands-and-shells)
 - [Running a Mac in a closet](#running-a-mac-in-a-closet)
 - [Backups and moving to a new Mac](#backups-and-moving-to-a-new-mac)
@@ -697,6 +698,113 @@ From a laptop with the Berth CLI, add the SSH remote once
 dev:push` in the repo pushes the snapshot over SSH and runs the deploy on the
 Mac. The exit codes and `--json` output are the same.
 
+## AI for your apps
+
+Berth can give every app an LLM: small models running on the Mac itself, cloud
+models with keys you add once, or both. Apps reach them all through one
+gateway in Berth, using the OpenAI or Anthropic SDK they'd use anyway, and
+never see your provider keys.
+
+### Set it up once
+
+```bash
+berth ai:setup
+```
+
+This installs [Ollama](https://ollama.com) with Homebrew and starts it
+whenever the Mac starts (it asks first), then downloads a model sized to your
+Mac: `qwen3:8b` with 16 GB of memory or more, `qwen3:4b` below that. Pick
+another with `--model gemma3:4b`, or skip local models with `--cloud-only`.
+Local models run on the Mac's GPU, outside the app containers, which can't
+use it.
+
+Add any cloud providers you want (the key prompt is hidden):
+
+```bash
+berth ai:key anthropic          # also: openai, gemini, openrouter, groq, mistral
+berth ai:key together --url https://api.together.xyz/v1    # any OpenAI-compatible service
+```
+
+### Give an app access
+
+```bash
+berth ai:enable myapp
+```
+
+The app gets its own token and the standard variables, and redeploys:
+
+| Variable | Value |
+| --- | --- |
+| `OPENAI_BASE_URL` | `http://<gateway>:7790/v1` |
+| `OPENAI_API_KEY` | `berth_ai_…` (this app's token) |
+| `ANTHROPIC_BASE_URL` | `http://<gateway>:7790/anthropic` |
+| `ANTHROPIC_API_KEY` | the same token |
+
+The OpenAI and Anthropic SDKs read these on their own, so the code is
+ordinary:
+
+```js
+import OpenAI from "openai";
+const client = new OpenAI();   // reads OPENAI_BASE_URL and OPENAI_API_KEY
+const reply = await client.chat.completions.create({
+  model: "default",
+  messages: [{ role: "user", content: "Hello!" }],
+});
+```
+
+Python's `openai` and `anthropic` packages work the same way. Every provider
+is available in the OpenAI format (`/v1/chat/completions`, `/v1/embeddings`,
+`/v1/models`); Claude models are also available through Anthropic's own API,
+for tools, prompt caching and extended thinking.
+
+### Choosing models
+
+Apps ask for a model by name: `local/qwen3:8b`, `anthropic/claude-sonnet-5-5`,
+or an **alias** you define once for all apps:
+
+```bash
+berth ai:alias smart anthropic/claude-sonnet-5-5
+berth ai:alias fast  groq/llama-3.3-70b-versatile
+berth ai:models                  # aliases, downloaded local models, providers
+berth ai:pull nomic-embed-text   # another local model, e.g. for embeddings
+```
+
+`ai:setup` points `default` at the local model. Write apps against aliases
+(`"default"`, `"smart"`) rather than model names: changing what an alias
+points at takes effect immediately, for every app, without redeploying.
+
+### Limits and usage
+
+```bash
+berth ai:enable myapp --models default,smart --monthly-tokens 2000000 --rpm 60
+berth ai:usage                   # requests and tokens per app and model this month
+berth ai:status                  # what's running, what's in memory, each app's usage
+berth ai:disable myapp           # revoke its token
+```
+
+`--models` takes aliases, `provider/model` or `provider/*`. When an app goes
+over a limit it gets a "429 Too Many Requests" error that says which limit
+and how to raise it. Usage records tokens and timings, never prompts or
+replies.
+
+[Dev versions](#dev-versions-for-agents) of an app that uses AI get their
+own token, limited to local models, so an agent testing changes can't run up
+a cloud bill (`berth ai:enable myapp-dev --models 'local/*,smart'` lifts
+that).
+
+### Memory
+
+A loaded local model takes real memory: about 5 GB for an 8B model, 2.5 GB
+for a 4B one. Ollama frees it after 5 idle minutes. `berth status` shows
+what's loaded and counts it in the Mac's committed memory, and warns when
+apps, databases and the model together approach the Mac's RAM. On an 8 GB
+Mac, a cloud provider (or a small model) is the comfortable choice.
+
+The gateway listens on port 7790 of the containers' network, and only
+containers on this Mac can reach it. To use another port, set `ai_port` in
+`~/.berth/config.json` and run `berth reload`. To use Ollama on another
+machine, set `ollama_url` in `~/.berth/ai/config.json`.
+
 ## One-off commands and shells
 
 ```bash
@@ -838,6 +946,12 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth dev:token <app> [--as email] [--revoke]` · `dev:db:copy` · `dev:reset` · `dev:agents` · `dev:off` · `dev:on` | dev versions |
 | `berth access <app> [path] [public \| signed-in \| allow who... \| off] [--remove]` | Google sign-in policy |
 | `berth auth:setup google [--host h]` · `auth:status` · `auth:group <name> [who...]` · `auth:sessions` · `auth:revoke <email>` | sign-in setup, groups, sessions |
+| **AI** | |
+| `berth ai:setup [--model m] [--cloud-only]` | install Ollama, download a local model, start the gateway |
+| `berth ai:key <provider> [key] [--url u] [--remove]` | add a cloud provider's key (or any OpenAI-compatible URL) |
+| `berth ai:alias [name] [provider/model] [--remove]` | name models for apps; changes apply at once |
+| `berth ai:enable <app> [--models …] [--monthly-tokens n] [--rpm n]` · `ai:disable <app>` | give or revoke an app's access |
+| `berth ai:status` · `ai:models` · `ai:pull <model>` · `ai:usage [app] [--month m]` | what's available, downloads, usage |
 | **Storage and services** | |
 | `berth storage:mount \| unmount \| list <app> [path]` | persistent folders |
 | `berth pg:create \| link \| unlink \| psql \| backup \| restore \| expose \| upgrade \| destroy \| list` | Postgres |
@@ -907,7 +1021,7 @@ work. Each README lists the `berth` commands to deploy it.
 | Repo | Stack | Shows |
 | --- | --- | --- |
 | [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, storage mounts, crash recovery |
-| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres with Google sign-in and migrations; build step, client-side routes |
+| [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a small Twitter clone on Postgres with Google sign-in, migrations and an AI timeline summary; build step, client-side routes |
 | [berth_hello_go](https://github.com/dps/berth_hello_go) | Go standard library | static binary on Alpine |
 | [berth_hello_rust](https://github.com/dps/berth_hello_rust) | Rust + axum | cached dependency builds (4 s redeploys) |
 

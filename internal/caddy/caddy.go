@@ -41,17 +41,25 @@ type Route struct {
 }
 
 type Options struct {
-	Admin       string   // 127.0.0.1:2019
-	HTTPListen  string   // 127.0.0.1:80
-	HTTPSListen string   // :443, empty disables the LAN server
-	DNSAddr     string   // berthd's SRV responder, e.g. 127.0.0.1:7753
-	SRVDomain   string   // berth.internal
-	AuthAddr    string   // berthd's sign-in server, e.g. 127.0.0.1:7781
-	AuthHost    string   // auth.<domain>; empty when sign-in isn't set up
-	IDHeaders   []string // identity headers: always stripped from clients, copied from forward_auth
-	LANHTTP     string   // :80 redirect to HTTPS on the LAN, empty disables
-	StorageDir  string   // Caddy's data dir (internal CA lives here)
-	Routes      []Route
+	Admin       string // 127.0.0.1:2019
+	HTTPListen  string // 127.0.0.1:80
+	HTTPSListen string // :443, empty disables the LAN server
+	DNSAddr     string // berthd's SRV responder, e.g. 127.0.0.1:7753
+	SRVDomain   string // berth.internal
+	AuthAddr    string // berthd's sign-in server, e.g. 127.0.0.1:7781
+	AuthHost    string // auth.<domain>; empty when sign-in isn't set up
+	// AIListen, when set, is where apps reach berthd's AI gateway (AIAddr):
+	// a port on every interface, answering only AISources (the container
+	// network and loopback). Caddy, not berthd, listens there because
+	// macOS's firewall approves apps, not ports, and Caddy already serves
+	// the LAN.
+	AIListen   string
+	AIAddr     string
+	AISources  []string
+	IDHeaders  []string // identity headers: always stripped from clients, copied from forward_auth
+	LANHTTP    string   // :80 redirect to HTTPS on the LAN, empty disables
+	StorageDir string   // Caddy's data dir (internal CA lives here)
+	Routes     []Route
 }
 
 type obj = map[string]any
@@ -133,6 +141,28 @@ func Build(o Options) obj {
 			"trusted_proxies":   obj{"source": "static", "ranges": []string{"127.0.0.1/32", "::1/128"}},
 			"client_ip_headers": []string{"Cf-Connecting-Ip", "X-Forwarded-For"},
 		},
+	}
+	if o.AIListen != "" && o.AIAddr != "" {
+		servers["ai"] = obj{
+			"listen":          []string{o.AIListen},
+			"automatic_https": obj{"disable": true},
+			"routes": []any{
+				obj{
+					"match": []any{obj{"remote_ip": obj{"ranges": o.AISources}}},
+					"handle": []any{obj{
+						"handler":        "reverse_proxy",
+						"upstreams":      []any{obj{"dial": o.AIAddr}},
+						"flush_interval": -1,
+					}},
+					"terminal": true,
+				},
+				obj{"handle": []any{obj{
+					"handler":     "static_response",
+					"status_code": 403,
+					"body":        "the Berth AI gateway only answers Berth apps\n",
+				}}},
+			},
+		}
 	}
 	httpApp := obj{"servers": servers}
 	cfg := obj{

@@ -303,6 +303,50 @@ then asks berthd to deploy that commit to the dev version. The app is the argume
 
 **Not in v1:** promoting dev to production (commit and push instead; production history stays in git), several dev versions per app (per-branch previews), and waking on a request.
 
+## AI gateway
+
+Every app can use an LLM, local or cloud, through one gateway in berthd, without holding a provider key. The Mac runs small models itself with Ollama; cloud providers are added with a key the owner gives Berth once. Apps can't tell the difference, and the owner can move an app from a local model to a cloud one (or the reverse) without touching it.
+
+```
+app container ──Bearer berth_ai_<token>──▶ Caddy :7790 (container network only) ──▶ berthd 127.0.0.1:7782
+                                                                                     ├─▶ Ollama (127.0.0.1:11434)
+                                                                                     └─▶ Anthropic, OpenAI, Gemini, OpenRouter, Groq, Mistral, or any OpenAI-compatible URL
+```
+
+**What an app sees.** `berth ai:enable <app>` gives the app its own token and sets the variables every OpenAI and Anthropic SDK already reads:
+
+```
+OPENAI_BASE_URL=http://<gateway>:7790/v1          ANTHROPIC_BASE_URL=http://<gateway>:7790/anthropic
+OPENAI_API_KEY=berth_ai_…                         ANTHROPIC_API_KEY=berth_ai_… (the same token)
+```
+
+then makes a config release. The gateway serves the OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/models`) for every provider, and passes Anthropic's Messages API through untouched at `/anthropic/v1/messages` (and `count_tokens`) so tools, prompt caching and extended thinking work with Claude. Most providers, Ollama included, speak the OpenAI format natively, so the gateway translates nothing: it checks the token, swaps the model name, adds the real key and relays the response, streaming server-sent events as they arrive. An app that already has its own `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` isn't overwritten without `--replace`; `ai:disable` revokes the token and removes the variables.
+
+**Models are named, not hard-coded.** Apps ask for `provider/model` (`local/qwen3:8b`, `anthropic/claude-sonnet-5-5`, `openrouter/meta-llama/…`) or, better, an alias the owner defines once for every app: `berth ai:alias smart anthropic/claude-sonnet-5-5`. Retargeting an alias takes effect on the next request; nothing redeploys. `ai:setup` creates `default` → the local model. Aliases point at models, never at other aliases.
+
+**Local models run on the host, not in a container.** Apple's containers have no GPU access, so a model in one runs on the CPU several times slower. Ollama runs natively on macOS (Metal) and listens on loopback; only berthd talks to it. `berth ai:setup` installs it with Homebrew and starts it with `brew services` (asking first; Ollama.app works too, as does another machine's Ollama via `ollama_url` in `ai/config.json`), then downloads a model sized to the Mac: `qwen3:8b` (about 5 GB in memory) from 16 GB of RAM, `qwen3:4b` (about 2.5 GB) below that; `--model` picks another and `--cloud-only` skips Ollama entirely. Ollama unloads an idle model after 5 minutes. Local requests are queued (`local_parallel`, default 2, in `ai/config.json`) rather than overcommitting memory; a request that waits 5 minutes gets a 503.
+
+**Why Caddy listens, not berthd.** Containers reach the Mac at the `berth` network's gateway address, where berthd would need a new listening socket, and macOS's application firewall approves listeners per app, not per port: berthd (ad-hoc signed, updated by Homebrew) would prompt or be silently blocked on Macs with the firewall on. Caddy already accepts connections for the LAN. So Caddy's config gains an `ai` server on `:7790` (`ai_port` in `config.json`) that answers only the container network's /24 and loopback (403 for anyone else) and proxies with flushing to berthd's gateway on `127.0.0.1:7782` (`ai_addr`). The server exists only once AI is set up or an app uses it, so Berths without AI open no port; `ai:setup` checks the port is free first, since an occupied port would fail Caddy's whole reload. If the network gateway address changes, apps' `OPENAI_BASE_URL` is rewritten with the service URLs.
+
+**Keys stay in berthd.** Provider keys live in `secrets/ai.json` (0600) and are only ever sent to their provider; apps hold a `berth_ai_` token, stored hashed in `app.json`. Built in: `openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `mistral`; any other OpenAI-compatible service is one command (`berth ai:key together --url https://api.together.xyz/v1`), including key-less servers on the LAN (`berth ai:key lmstudio --url http://studio.local:1234/v1`).
+
+**Limits per app.** `ai:enable` takes `--models` (aliases, `provider/model` or `provider/*`; default any), `--monthly-tokens` (input plus output, per calendar month) and `--rpm`. Over a limit the app gets a 429 in its SDK's error format (OpenAI's or Anthropic's), with a message naming the limit and the command that changes it. Budgets are in tokens, not dollars: providers' prices change and differ by caching tier, and a stale price table would be confidently wrong.
+
+**Usage.** Every request appends a line to `ai/usage-YYYY-MM.jsonl`: time, app, what it asked for, the model that served it, input and output tokens as the provider reported them, latency and status. Prompts and replies are never logged. Streams count too: for OpenAI-style streams the gateway sets `stream_options.include_usage` and, if the app didn't ask for it, drops the final usage-only chunk before it reaches the app; for Anthropic streams it reads `message_start` and `message_delta`. This month's totals are rebuilt from the log at startup, so budgets survive restarts. `berth ai:usage [app]` sums it by app and model; `berth ai:status` shows each app's tokens against its budget.
+
+**Dev versions** get their own token, limited to `local/*`, when created from a parent that uses AI, so an agent looping on `dev:push` can't run up a cloud bill. `berth ai:enable <app>-dev --models 'local/*,smart'` widens it.
+
+**Visibility.** `berth status` adds an `ai` line (Ollama up or down, which model is in memory and its size), and counts that memory in "committed", so the over-commit warning includes it. `berth doctor` checks that the gateway answers through Caddy and, when an alias uses a local model, that Ollama answers.
+
+**Results** (Mac mini M4, 16 GB, Ollama 0.40.11, qwen3:8b):
+
+- `ai:setup` picked qwen3:8b for 16 GB, downloaded it and set `default`. Loaded, it holds 4.9 GB.
+- From inside the chirp-dev container: a non-streaming request through `OPENAI_BASE_URL` with the app's token answered in 30 s cold (model load plus qwen3's thinking, 266 output tokens), a streamed one in 13.6 s across 183 events with the extra usage chunk removed, a wrong token got 401, a cloud model with no key got a 503 naming `berth ai:key anthropic`. `ai:usage` showed 4 requests, 84 input and 797 output tokens.
+- Chirp's "What's happening?" summary (a 50-line timeline in, two sentences out): 12.9 s on first ask, 0.09 s after (Chirp caches it until the timeline changes).
+- Starting Ollama at login (`brew services start ollama`) wasn't exercised: the coding agent that built this isn't allowed to install launch agents, so Ollama ran as a plain `ollama serve` for these tests.
+
+**Not in v1:** translating between API formats (local models over the Anthropic API, or Claude over OpenAI's beyond what Anthropic's own compatibility endpoint offers), dollar budgets, per-request prompt logging, response caching, and fallbacks between providers.
+
 ## Storage
 
 Postgres is the built-in service; everything else is a bind-mounted folder. Both keep data on the Mac's own disk under `~/.berth`, so Time Machine (or any backup the user already has) covers it with no extra setup — via nightly dumps for Postgres, directly for app folders.
@@ -355,6 +399,10 @@ All state is plain files under `~/.berth`, readable with `cat`, backed up with `
     keys/<app>           # SSH deploy keys (app:set-key)
     cloudflared/<tunnel>.json     # tunnel credentials
     cloudflared/zones/<zone>.pem  # browser-login cert per connected zone
+    ai.json              # AI provider keys
+  ai/
+    config.json          # aliases, extra providers, ollama_url, local_parallel
+    usage-YYYY-MM.jsonl  # one line per AI request: app, model, tokens, latency (no prompts)
   apps/<app>/
     app.json             # repo, branch, path, private, mounts, links, domains, auth, hook secret, poll state
     env                  # KEY=value, mode 0600; the live config
@@ -413,6 +461,7 @@ The attack surface is two HTTP endpoints behind Cloudflare, nothing else. The th
 - **Input validation**: values that reach git, shell hooks, Caddy matchers or Cloudflare expressions are validated where they enter: branches, paths and refs follow git ref rules and can't start with `-`; repos can't start with `-` or contain shell metacharacters; custom domains must be plain hostnames (no wildcards) and can't collide with `hooks.<domain>`, another app's `<app>.<domain>` or LAN names; the `git push berth` hook single-quotes every field anyway.
 - **Supply chain**: images are pulled from the registry the Dockerfile names; Berth templates pin major tags (`node:22-slim`, `postgres:17`). `berth doctor --images` lists images with available updates.
 - **Sign-in**: Google login runs in berthd behind Caddy's `forward_auth` (see Sign-in). Clients can't forge identity headers (Caddy deletes `X-Berth-*` on every route); one-time codes, nonce cookies and PKCE protect the login hand-off; redirects only go to Berth app hostnames and same-host paths; logout is POST with an Origin check; sessions are stored hashed. If berthd is down, apps with a policy answer 502, so `allow` and `signed-in` apps fail closed.
+- **AI gateway**: provider keys never leave berthd; apps get per-app tokens (stored hashed) that only the gateway accepts, limited by model, tokens a month and requests a minute. The gateway port answers only the container network and loopback. Prompts aren't logged.
 - **Public by default is a choice**: `berth create --private` creates the app with no public hostname: its Caddy route matches only LAN hosts, so tunnel requests for it get a 404; `berth auth:set` adds basic auth in Caddy; both are one flag because the hobbyist default should be safe to flip either way.
 
 ## CLI reference
@@ -434,6 +483,7 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth auth:set\|unset <app> user:pass` | basic auth in Caddy | http-auth plugin |
 | `berth access <app> [path] <public\|signed-in\|allow who...\|off> [--remove]` | Google sign-in policy for an app or path | — |
 | `berth dev:push [app] [--json]` / `dev:token <app> [--as email] [--revoke]` / `dev:db:copy <app>` / `dev:reset <app>` / `dev:agents <app>` / `dev:off\|on <app>` | dev versions at `<app>-dev.<domain>` (any app command also works on `<app>-dev`) | — |
+| `berth ai:setup [--model m] [--cloud-only]` / `ai:key <provider> [key] [--url u]` / `ai:alias <name> <provider/model>` / `ai:pull <model>` / `ai:enable <app> [--models …] [--monthly-tokens n] [--rpm n]` / `ai:disable <app>` / `ai:status` / `ai:models` / `ai:usage [app]` | the AI gateway: local models with Ollama, cloud providers with Berth-held keys | — |
 | `berth auth:setup google [--host h] [--owner email]` / `auth:status` / `auth:group <name> [who...]` / `auth:sessions` / `auth:revoke <email>` | sign-in setup, groups and sessions | — |
 | `berth storage:mount\|unmount\|list <app> <path>` | persistent folders | `storage:*` |
 | `berth pg:create\|link\|unlink\|psql\|backup\|restore\|expose\|upgrade\|destroy\|list` | Postgres service | dokku-postgres |

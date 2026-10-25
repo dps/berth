@@ -57,19 +57,24 @@ type ServiceStatus struct {
 }
 
 type SystemStatus struct {
-	Version          string   `json:"version"`
-	Uptime           string   `json:"uptime"`
-	Domain           string   `json:"domain"`
-	ContainerRunning bool     `json:"container_running"`
-	CaddyUp          bool     `json:"caddy_up"`
-	TunnelMode       string   `json:"tunnel_mode"` // off, local, remote
-	TunnelConnected  bool     `json:"tunnel_connected"`
-	DiskFreeBytes    uint64   `json:"disk_free_bytes"`
-	MemPhysical      int64    `json:"mem_physical"`
-	MemCommitted     int64    `json:"mem_committed"`
-	FileVault        string   `json:"filevault"`
-	Mode             string   `json:"mode"` // filevault | unattended
-	Warnings         []string `json:"warnings,omitempty"`
+	Version          string `json:"version"`
+	Uptime           string `json:"uptime"`
+	Domain           string `json:"domain"`
+	ContainerRunning bool   `json:"container_running"`
+	CaddyUp          bool   `json:"caddy_up"`
+	TunnelMode       string `json:"tunnel_mode"` // off, local, remote
+	TunnelConnected  bool   `json:"tunnel_connected"`
+	DiskFreeBytes    uint64 `json:"disk_free_bytes"`
+	MemPhysical      int64  `json:"mem_physical"`
+	MemCommitted     int64  `json:"mem_committed"`
+	FileVault        string `json:"filevault"`
+	Mode             string `json:"mode"` // filevault | unattended
+	// AI is "" when the gateway isn't set up, else "up" or "down" (Ollama
+	// not answering while an alias uses a local model).
+	AI       string   `json:"ai,omitempty"`
+	AILoaded []string `json:"ai_loaded,omitempty"` // local models in memory
+	AIMem    int64    `json:"ai_mem,omitempty"`    // their size, included in MemCommitted
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type Status struct {
@@ -227,6 +232,19 @@ func (d *Daemon) Status(ctx context.Context) (*Status, error) {
 		}
 		st.Services = append(st.Services, ss)
 	}
+	if d.Store.AIConfigured() {
+		if ai, err := d.aiStatus(ctx); err == nil {
+			sys.AI = "up"
+			if ai.OllamaError != "" && usesLocal(ai.Aliases) {
+				sys.AI = "down"
+			}
+			for _, m := range ai.Loaded {
+				sys.AILoaded = append(sys.AILoaded, m.Name)
+				sys.AIMem += m.Size
+			}
+			sys.MemCommitted += sys.AIMem
+		}
+	}
 	sys.Warnings = d.warnings(cfg, st)
 	return st, nil
 }
@@ -248,6 +266,9 @@ func (d *Daemon) warnings(cfg *state.Config, st *Status) []string {
 	}
 	if sys.MemPhysical > 0 && sys.MemCommitted > sys.MemPhysical*8/10 {
 		w = append(w, fmt.Sprintf("committed memory %s exceeds 80%% of physical %s", deploy.HumanBytes(sys.MemCommitted), deploy.HumanBytes(sys.MemPhysical)))
+	}
+	if sys.AI == "down" {
+		w = append(w, "Ollama isn't answering, so apps' local models fail (berth ai:status; brew services start ollama)")
 	}
 	if !cfg.Unattended && sys.FileVault == "on" {
 		w = append(w, "FileVault is on: after a power cut the Mac waits for a password before apps return (use a UPS, or see Reboots and FileVault in the docs)")

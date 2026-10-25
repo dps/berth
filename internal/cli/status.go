@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -109,6 +110,13 @@ func printStatus(st *daemon.Status, offline, oneApp bool) {
 				fmt.Printf(" · memory %s of %s committed", deploy.HumanBytes(sys.MemCommitted), deploy.HumanBytes(sys.MemPhysical))
 			}
 			fmt.Println()
+			if sys.AI != "" {
+				loaded := "no model in memory"
+				if len(sys.AILoaded) > 0 {
+					loaded = strings.Join(sys.AILoaded, ", ") + " in memory (" + deploy.HumanBytes(sys.AIMem) + ")"
+				}
+				fmt.Printf("ai %s · %s\n", yesno(sys.AI == "up", "up", "down: Ollama not answering"), loaded)
+			}
 		}
 		fmt.Println()
 	}

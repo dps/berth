@@ -80,6 +80,7 @@ func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer
 		links = append(links, devLink{kind, svName, l.EnvVar})
 	}
 	env[state.KeyKeepReleases] = "3"
+	devAI(cfg, parent, dev, env) // its own token, local models only
 	if err := d.Store.SaveApp(dev); err != nil {
 		return nil, err
 	}
