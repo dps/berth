@@ -2,18 +2,18 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
