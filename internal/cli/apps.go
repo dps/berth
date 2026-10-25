@@ -48,7 +48,7 @@ func cmdCreate() *cobra.Command {
 	c.Flags().StringVar(&p.Repo, "repo", "", "GitHub owner/name, or any git URL or local path")
 	c.Flags().StringVar(&p.Branch, "branch", "main", "branch to deploy")
 	c.Flags().StringVar(&p.Path, "path", "", "build from this subdirectory (monorepos)")
-	c.Flags().BoolVar(&p.Private, "private", false, "no public hostname: LAN/Tailscale only")
+	c.Flags().BoolVar(&p.Private, "private", false, "no public hostname: LAN only")
 	c.Flags().BoolVar(&p.NoWebhook, "no-webhook", false, "poll the branch every 60 s instead of registering a webhook")
 	c.Flags().BoolVar(&p.NoDeploy, "no-deploy", false, "register only; deploy later")
 	return c

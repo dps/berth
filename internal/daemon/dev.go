@@ -54,7 +54,7 @@ func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer
 	if d.signInHost(cfg) != "" {
 		dev.Access = &state.Access{Level: state.LevelAllow, Allow: []string{"@" + devOwnersGroup}}
 	} else {
-		dev.Private = true // no sign-in: LAN and Tailscale only
+		dev.Private = true // no sign-in: LAN only
 	}
 	for _, m := range parent.Mounts {
 		dev.Mounts = append(dev.Mounts, state.Mount{Path: m.Path, Source: d.Store.Path("data", "apps", name, filepath.Base(m.Source))})

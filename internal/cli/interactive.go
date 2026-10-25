@@ -169,7 +169,7 @@ func cmdGitRemote() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&host, "host", "", "SSH host of the Mac (default <hostname>.local; use a Tailscale name for remote)")
+	c.Flags().StringVar(&host, "host", "", "SSH host of the Mac (default <hostname>.local)")
 	c.Flags().StringVar(&name, "name", "berth", "remote name")
 	return c
 }

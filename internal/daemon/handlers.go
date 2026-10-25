@@ -131,9 +131,6 @@ func AppURLs(cfg *state.Config, a *state.App) []string {
 		}
 		urls = append(urls, u)
 	}
-	if cfg.Tailscale && cfg.TailnetDomain != "" {
-		urls = append(urls, "https://"+a.Name+"."+cfg.TailnetDomain)
-	}
 	return urls
 }
 
@@ -668,7 +665,7 @@ type DomainParams struct {
 }
 
 // reservedHost reports whether host is one Berth already serves itself:
-// the webhook host, an app's own <app>.<domain>, or a LAN/tailnet name.
+// the webhook host, an app's own <app>.<domain>, or a LAN name.
 func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
 	if cfg.Domain != "" {
 		if host == "hooks."+cfg.Domain {
@@ -686,8 +683,8 @@ func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
 			}
 		}
 	}
-	if strings.HasSuffix(host, ".local") || (cfg.TailnetDomain != "" && strings.HasSuffix(host, "."+cfg.TailnetDomain)) {
-		return "a LAN or tailnet name Berth assigns itself"
+	if strings.HasSuffix(host, ".local") {
+		return "a LAN name Berth assigns itself"
 	}
 	return ""
 }

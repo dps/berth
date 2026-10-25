@@ -54,7 +54,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - **An Apple Silicon Mac on macOS 26 or later.** A Mac mini is ideal; 16 GB
   comfortably runs about 20 small apps plus a database.
 - **A domain on Cloudflare** (the free plan is fine) for public URLs. Without
-  one, Berth still works on your LAN, or privately over Tailscale.
+  one, Berth still works on your LAN.
 - **A GitHub account.** You authorize Berth in the browser so it can clone
   private repos and register webhooks. Public repos work without it, deploying
   by polling.
@@ -104,7 +104,6 @@ changes only what the flags say.
 | You want | Run |
 | --- | --- |
 | LAN only, no Cloudflare | `berth init --no-tunnel` |
-| Private access from anywhere via Tailscale | `berth init --no-tunnel --tailscale` |
 | Fully scripted, no browser | `berth init --domain example.com --github-token ghp_… --yes` (Cloudflare still needs one browser login, or a copied `~/.berth/secrets/cloudflared/`) |
 | Only GitHub's servers may reach the webhook URL | `berth init --cf-ip-filter --cf-token …` (the one feature that needs an API token, with *Zone · WAF · Edit*) |
 | Recover from power cuts with nobody present | `berth init --unattended` (see [Reboots and FileVault](#reboots-and-filevault)) |
@@ -208,7 +207,7 @@ git push berth main
 ```
 
 `git push berth` needs **Remote Login** on the Mac (System Settings → General →
-Sharing). From outside your LAN, use `berth git:remote myapp --host <tailscale-name>`.
+Sharing). From elsewhere, use `berth git:remote myapp --host <ssh-host>` with any name that reaches the Mac over SSH.
 
 ### Private repos
 
@@ -499,7 +498,6 @@ Every app is reachable at:
 | --- | --- |
 | `https://myapp.example.com` | anywhere, through the Cloudflare tunnel |
 | `https://myapp.your-mac.local` | your LAN; advertised over Bonjour, with Caddy's local certificate |
-| `https://myapp.<tailnet>.ts.net` | your tailnet, with `init --tailscale` |
 
 `your-mac` is the Mac's local hostname (System Settings → General → Sharing).
 To make LAN URLs show a lock on this Mac, run `berth trust-ca`. On other
@@ -533,7 +531,7 @@ Cloudflare-proxied zone for the tunnel to serve it.
 ### Private apps and passwords
 
 ```bash
-berth create admin-tool --repo you/admin-tool --private   # LAN and Tailscale only; no public URL
+berth create admin-tool --repo you/admin-tool --private   # LAN only; no public URL
 berth auth:set myapp alice:correct-horse-battery          # HTTP basic auth, enforced by Caddy
 berth auth:unset myapp
 ```
@@ -652,8 +650,7 @@ or `CLAUDE.md` that tells an agent how to deploy, read logs and authenticate.
 
 Dev versions run unreviewed code, so they aren't public. With
 [sign-in](#sign-in-with-google) set up, they're open to the `@owners` group
-(`berth auth:group owners you@gmail.com`); without it, they're LAN and
-Tailscale only. Agents can't click through Google, so give them a token:
+(`berth auth:group owners you@gmail.com`); without it, they're LAN only. Agents can't click through Google, so give them a token:
 
 ```bash
 berth dev:token myapp --as test@example.com     # prints export BERTH_DEV_TOKEN=…

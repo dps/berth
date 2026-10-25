@@ -182,9 +182,6 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if cfg.Hostname != "" {
 			lan = []string{name + "." + cfg.Hostname + ".local"}
 		}
-		if cfg.Tailscale && cfg.TailnetDomain != "" {
-			lan = append(lan, name+"."+cfg.TailnetDomain)
-		}
 		return
 	}
 	for _, a := range apps {
@@ -259,7 +256,6 @@ func (d *Daemon) Apply(ctx context.Context) error {
 	if d.mdns != nil {
 		d.mdns.sync(cfg, apps)
 	}
-	go tsReg.sync(cfg, apps)
 	return d.Caddy.Load(ctx, conf)
 }
 

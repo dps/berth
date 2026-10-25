@@ -28,7 +28,6 @@ import (
 type initOpts struct {
 	domain      string
 	noTunnel    bool
-	tailscale   bool
 	cfIPFilter  bool
 	unattended  bool
 	githubToken string
@@ -62,7 +61,6 @@ func cmdInit() *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&o.domain, "domain", "", "domain on your Cloudflare account; apps live at <app>.<domain>")
 	f.BoolVar(&o.noTunnel, "no-tunnel", false, "no public ingress: LAN hostnames only")
-	f.BoolVar(&o.tailscale, "tailscale", false, "also serve apps to your tailnet with Tailscale Services")
 	f.BoolVar(&o.cfIPFilter, "cf-ip-filter", false, "only let GitHub's webhook IPs reach hooks.<domain> (Cloudflare WAF rule)")
 	f.BoolVar(&o.unattended, "unattended", false, "plan for FileVault off + automatic login, so power cuts recover with no one present")
 	f.StringVar(&o.githubToken, "github-token", "", "GitHub token with repo and admin:repo_hook scopes")
@@ -103,7 +101,6 @@ func runInit(o initOpts) error {
 	if cfg.Domain == "" && !cfg.NoTunnel {
 		return fmt.Errorf("--domain is required (or --no-tunnel for LAN-only)")
 	}
-	cfg.Tailscale = cfg.Tailscale || o.tailscale
 	cfg.CFIPFilter = cfg.CFIPFilter || o.cfIPFilter
 	cfg.Unattended = cfg.Unattended || o.unattended
 	if cfg.TunnelName == "" {
@@ -171,19 +168,6 @@ func runInit(o initOpts) error {
 		}
 	}
 
-	// 5. Tailscale.
-	if cfg.Tailscale {
-		out, err := exec.Command(runtime.LookBin("tailscale"), "status", "--json").Output()
-		if err != nil {
-			return fmt.Errorf("--tailscale: `tailscale status` failed (is Tailscale installed and up?): %v", err)
-		}
-		var ts struct {
-			MagicDNSSuffix string `json:"MagicDNSSuffix"`
-		}
-		json.Unmarshal(out, &ts)
-		cfg.TailnetDomain = strings.TrimSuffix(ts.MagicDNSSuffix, ".")
-		note("tailnet %s: apps will be served as Tailscale Services <app>.%s", cfg.TailnetDomain, cfg.TailnetDomain)
-	}
 	if err := s.SaveConfig(cfg); err != nil {
 		return err
 	}
