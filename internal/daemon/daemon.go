@@ -57,6 +57,7 @@ type Daemon struct {
 	hookHits      map[string][]time.Time // rate limiting per app
 	mdns          *mdnsRegistry
 	restoring     atomic.Bool // pauses the supervisor while `berth restore` rebuilds state
+	tunnelRetry   atomic.Bool // a tunnel config update failed; the supervisor retries it
 	cfMu          sync.Mutex
 	lastTunnelCfg string
 
@@ -147,7 +148,7 @@ func (d *Daemon) event(ev state.Event) {
 	}
 	slog.Info(ev.Message, "kind", ev.Kind, "app", ev.App)
 	switch ev.Kind {
-	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed":
+	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed", "network":
 		go d.notify(ev)
 	}
 }
@@ -225,6 +226,7 @@ func (d *Daemon) customDomains() []string {
 // tunnel is remotely managed and updates apply live; without one the local
 // config file is rewritten and cloudflared restarted (a brief blip).
 func (d *Daemon) ApplyTunnel(ctx context.Context, restartOK bool) (restarted bool, err error) {
+	defer func() { d.tunnelRetry.Store(err != nil) }()
 	cfg := d.cfg()
 	if cfg.NoTunnel || cfg.TunnelID == "" {
 		return false, nil

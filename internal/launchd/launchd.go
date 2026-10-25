@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/dps/berth/templates"
 )
@@ -93,9 +94,19 @@ func Install(a Agent) error {
 	}
 	if Loaded(a.Label) {
 		launchctl("bootout", domain()+"/"+a.Label)
+		// bootout returns before the job is fully gone; bootstrapping too
+		// soon fails with "Bootstrap failed: 5: Input/output error".
+		for i := 0; i < 50 && Loaded(a.Label); i++ {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
-	_, err = launchctl("bootstrap", domain(), path)
-	return err
+	for attempt := 0; ; attempt++ {
+		_, err = launchctl("bootstrap", domain(), path)
+		if err == nil || attempt == 4 || Loaded(a.Label) {
+			return err
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // Uninstall unloads and removes the agent.

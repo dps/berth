@@ -587,7 +587,7 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 	}
 	restarted, err := d.ApplyTunnel(ctx, true)
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(out, "       Cloudflare didn't accept the tunnel update yet (%v); berthd retries every 10 s\n", err)
 	}
 	if restarted {
 		fmt.Fprintln(out, "       warning: cloudflared was restarted to pick up the new hostname (in-flight requests may have dropped)")
@@ -695,7 +695,7 @@ func (d *Daemon) hDomainsRemove(ctx context.Context, params json.RawMessage, out
 	d.Apply(ctx)
 	d.removeDomainDNS(ctx, d.cfg(), []string{p.Host}, out)
 	if _, err := d.ApplyTunnel(ctx, true); err != nil {
-		return nil, err
+		fmt.Fprintf(out, "       Cloudflare didn't accept the tunnel update yet (%v); berthd retries every 10 s\n", err)
 	}
 	fmt.Fprintf(out, "-----> Removed %s from %s\n", p.Host, p.App)
 	return map[string]string{"removed": p.Host}, nil

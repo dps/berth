@@ -121,6 +121,7 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 		add(Check{Name: "container system running", Level: OK})
 		if gw, err := d.RT.EnsureNetwork(ctx, cfg.Network); err == nil {
 			add(Check{Name: "berth network", Level: OK, Detail: "gateway " + gw})
+			add(d.outboundCheck(ctx, cfg))
 		} else {
 			add(Check{Name: "berth network", Level: Fail, Detail: err.Error(), Fix: "container network create " + cfg.Network})
 		}
@@ -244,6 +245,30 @@ func (d *Doctor) Run(ctx context.Context, images bool) []Check {
 		cs = append(cs, d.imageChecks(ctx)...)
 	}
 	return cs
+}
+
+// outboundCheck starts a throwaway Alpine container on the berth network
+// and fetches an HTTPS URL, which is what builds and apps need.
+func (d *Doctor) outboundCheck(ctx context.Context, cfg *state.Config) Check {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var out strings.Builder
+	err := d.RT.RunWith(ctx, runtime.RunOpts{
+		Image:   "alpine:3",
+		Network: cfg.Network,
+		Remove:  true,
+		Args:    []string{"wget", "-q", "-T", "8", "-O", "/dev/null", "https://cloudflare.com/cdn-cgi/trace"},
+	}, nil, &out)
+	if err != nil {
+		return Check{Name: "containers reach the internet", Level: Fail, Detail: lastLine(err.Error()),
+			Fix: "container system stop && container system start (running apps restart automatically)"}
+	}
+	return Check{Name: "containers reach the internet", Level: OK}
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return lines[len(lines)-1]
 }
 
 func fixIf(cond bool, fix string) string {

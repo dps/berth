@@ -65,6 +65,13 @@ func (d *Daemon) supervise(ctx context.Context) {
 		d.reexec()
 		return
 	}
+	if d.tunnelRetry.Load() {
+		if _, err := d.ApplyTunnel(ctx, true); err != nil {
+			slog.Warn("tunnel config retry", "err", err)
+		} else {
+			d.event(state.Event{Kind: "tunnel", Message: "tunnel configuration applied after retry"})
+		}
+	}
 	if !d.RT.SystemRunning(ctx) {
 		slog.Warn("container system down; restarting it")
 		if err := d.RT.SystemStart(ctx); err != nil {

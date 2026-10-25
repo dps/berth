@@ -186,6 +186,14 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 			return nil, err
 		}
 		if err := d.build(ctx, app, env, rel, buildDir, req.NoCache, out); err != nil {
+			if NetworkFailure(d.Store.Path("apps", app.Name, "logs", fmt.Sprintf("build-%d.log", n))) {
+				say(out, "The build couldn't reach the internet. Apple's container network sometimes")
+				detail(out, "loses outbound access after the Mac's network changes. Fix it with")
+				detail(out, "  container system stop && container system start")
+				detail(out, "(running apps restart automatically), then deploy again. `berth doctor` checks this.")
+				d.Event(state.Event{Kind: "network", App: app.Name, Message: "containers have no outbound network: run `container system stop && container system start`"})
+				err = fmt.Errorf("build failed: containers can't reach the internet (see above)")
+			}
 			rel.Status, rel.Error = state.StatusFailed, err.Error()
 			d.Store.SaveRelease(app.Name, rel)
 			d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d build failed: %v", n, err)})
@@ -263,6 +271,30 @@ func isHex(s string) bool {
 		}
 	}
 	return true
+}
+
+// networkSignatures are what package managers print when a container has no
+// outbound network.
+var networkSignatures = []string{
+	"Network is unreachable", "network is unreachable", "Temporary failure in name resolution",
+	"Could not resolve host", "getaddrinfo EAI_AGAIN", "ETIMEDOUT", "ENETUNREACH",
+	"error sending request for url", "Failed to establish a new connection", "dial tcp: lookup",
+}
+
+// NetworkFailure reports whether a build log looks like the container had
+// no outbound network (as opposed to a broken Dockerfile).
+func NetworkFailure(logPath string) bool {
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return false
+	}
+	s := string(b)
+	for _, sig := range networkSignatures {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveDockerfile returns the Dockerfile path to build with, rendering a

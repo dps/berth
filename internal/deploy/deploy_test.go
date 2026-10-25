@@ -378,3 +378,21 @@ func TestRapidDeploysEndDrainEarly(t *testing.T) {
 		t.Fatalf("%d containers running; an app should never hold more than its two slots", running)
 	}
 }
+
+func TestNetworkFailureDetection(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(body), 0o600)
+		return p
+	}
+	uv := write("uv.log", "  cause: error sending request for url (https://pypi.org/simple/uvicorn/)\n  cause: operation timed out\n")
+	npm := write("npm.log", "npm error code EAI_AGAIN\nnpm error request to https://registry.npmjs.org/x failed, reason: getaddrinfo EAI_AGAIN registry.npmjs.org\n")
+	typo := write("typo.log", "ERROR: failed to solve: dockerfile parse error on line 3: unknown instruction: RUNN\n")
+	if !NetworkFailure(uv) || !NetworkFailure(npm) {
+		t.Error("network failures not detected")
+	}
+	if NetworkFailure(typo) || NetworkFailure(filepath.Join(dir, "missing.log")) {
+		t.Error("false positive")
+	}
+}
