@@ -343,7 +343,8 @@ then makes a config release. The gateway serves the OpenAI-compatible API (`/v1/
 - `ai:setup` picked qwen3:8b for 16 GB, downloaded it and set `default`. Loaded, it holds 4.9 GB.
 - From inside the chirp-dev container: a non-streaming request through `OPENAI_BASE_URL` with the app's token answered in 30 s cold (model load plus qwen3's thinking, 266 output tokens), a streamed one in 13.6 s across 183 events with the extra usage chunk removed, a wrong token got 401, a cloud model with no key got a 503 naming `berth ai:key anthropic`. `ai:usage` showed 4 requests, 84 input and 797 output tokens.
 - Chirp's "What's happening?" summary (a 50-line timeline in, two sentences out): 12.9 s on first ask, 0.09 s after (Chirp caches it until the timeline changes).
-- Starting Ollama at login (`brew services start ollama`) wasn't exercised: the coding agent that built this isn't allowed to install launch agents, so Ollama ran as a plain `ollama serve` for these tests.
+- Starting Ollama at login: the owner ran `brew services start ollama` (the coding agent that built this isn't allowed to install launch agents). It failed at first because the agent's test `ollama serve` still held port 11434; once that stopped, launchd's retry brought the service up. `ai:setup` could check for a stray Ollama before starting the service.
+- Production Chirp after `berth ai:enable chirp`: a three-word reply took 55 s cold, because qwen3 thinks by default (778 hidden output tokens despite `/no_think`) on top of loading the model. Apps that need quick answers from a thinking model should turn thinking off or use a smaller alias.
 
 **Not in v1:** translating between API formats (local models over the Anthropic API, or Claude over OpenAI's beyond what Anthropic's own compatibility endpoint offers), dollar budgets, per-request prompt logging, response caching, and fallbacks between providers.
 
