@@ -116,12 +116,16 @@ func (c *Client) User(ctx context.Context) (string, error) {
 	return u.Login, err
 }
 
-// CreateHook registers a push webhook and returns its id.
+// HookEvents are what Berth's webhooks receive: pushes deploy, and pull
+// requests drive previews.
+var HookEvents = []string{"push", "pull_request"}
+
+// CreateHook registers a webhook and returns its id.
 func (c *Client) CreateHook(ctx context.Context, repo, hookURL, secret string) (int64, error) {
 	body := map[string]any{
 		"name":   "web",
 		"active": true,
-		"events": []string{"push"},
+		"events": HookEvents,
 		"config": map[string]string{"url": hookURL, "content_type": "json", "secret": secret, "insecure_ssl": "0"},
 	}
 	var out struct {
@@ -314,4 +318,67 @@ func (p *PushEvent) Touches(path string) bool {
 		}
 	}
 	return false
+}
+
+// PullRequest is the part of a pull request previews need.
+type PullRequest struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
+	Head    struct {
+		SHA  string `json:"sha"`
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+}
+
+// FromRepo reports whether the PR's branch lives in repo itself, not a
+// fork (whose code a preview must never run).
+func (p *PullRequest) FromRepo(repo string) bool {
+	return p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo)
+}
+
+// OpenPulls lists repo's open pull requests (up to 100).
+func (c *Client) OpenPulls(ctx context.Context, repo string) ([]PullRequest, error) {
+	var prs []PullRequest
+	_, err := c.do(ctx, "GET", "/repos/"+repo+"/pulls?state=open&per_page=100", nil, &prs, nil)
+	return prs, err
+}
+
+// SetStatus sets a commit status (state: pending, success, failure,
+// error), shown as a check on pull requests with a link to targetURL.
+func (c *Client) SetStatus(ctx context.Context, repo, sha, state, targetURL, description, context string) error {
+	if len(description) > 140 {
+		description = description[:137] + "..."
+	}
+	body := map[string]string{"state": state, "description": description, "context": context}
+	if targetURL != "" {
+		body["target_url"] = targetURL
+	}
+	_, err := c.do(ctx, "POST", "/repos/"+repo+"/statuses/"+sha, body, nil, nil)
+	return err
+}
+
+// Comment adds a comment to issue or pull request n.
+func (c *Client) Comment(ctx context.Context, repo string, n int, body string) error {
+	_, err := c.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", repo, n), map[string]string{"body": body}, nil, nil)
+	return err
+}
+
+// SetHookEvents changes which events a webhook receives.
+func (c *Client) SetHookEvents(ctx context.Context, repo string, id int64, events []string) error {
+	_, err := c.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/hooks/%d", repo, id), map[string]any{"events": events}, nil, nil)
+	return err
+}
+
+// PullRequestEvent is the pull_request webhook payload.
+type PullRequestEvent struct {
+	Action      string      `json:"action"`
+	Number      int         `json:"number"`
+	PullRequest PullRequest `json:"pull_request"`
 }

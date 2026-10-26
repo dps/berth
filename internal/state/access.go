@@ -120,6 +120,12 @@ var (
 func ValidateAllowEntry(w string) error {
 	if name, ok := strings.CutPrefix(w, "@"); ok {
 		if strings.Contains(name, ".") {
+			// @domain matches Google's hd claim, which only Workspace
+			// accounts have: consumer Gmail would silently match nobody.
+			switch strings.ToLower(name) {
+			case "gmail.com", "googlemail.com":
+				return fmt.Errorf("%s would match nobody: @domain means a Google Workspace domain. For any Google account use signed-in; otherwise list the addresses", w)
+			}
 			return ValidateHostname(strings.ToLower(name))
 		}
 		if !groupNameRe.MatchString(name) {

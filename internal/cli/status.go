@@ -171,6 +171,16 @@ func printStatus(st *daemon.Status, offline, oneApp bool) {
 		for _, l := range a.Links {
 			fmt.Printf("link:   %s\n", l)
 		}
+		for _, w := range a.Workers {
+			st := "not running"
+			if w.Running {
+				st = "running, started " + ago(w.Since)
+			}
+			fmt.Printf("worker: %s %s (%s)\n", w.Name, st, w.Command)
+		}
+		if a.CronJobs > 0 {
+			fmt.Printf("cron:   %d job(s); berth cron %s lists them\n", a.CronJobs, a.Name)
+		}
 	}
 	if len(st.Services) > 0 {
 		fmt.Println()

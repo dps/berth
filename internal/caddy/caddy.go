@@ -242,7 +242,16 @@ func handlers(r Route, o Options) []any {
 			}},
 		})
 	}
-	if r.SignIn && o.AuthAddr != "" {
+	if r.SignIn && o.AuthAddr == "" {
+		// Fail closed: a policy with nowhere to check it serves nothing.
+		return append(hs, obj{
+			"handler":     "static_response",
+			"status_code": 503,
+			"body":        "Sign-in is misconfigured on this Berth (no auth_addr); run berth doctor.\n",
+			"headers":     obj{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		})
+	}
+	if r.SignIn {
 		rest := appHandlers(r, o)
 		if r.Private {
 			rest = append([]any{obj{"handler": "headers", "response": obj{"deferred": true, "set": obj{"Cache-Control": []string{"private, no-cache"}}}}}, rest...)

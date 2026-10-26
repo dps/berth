@@ -23,7 +23,7 @@ import (
 func excluded(rel string, d fs.DirEntry) bool {
 	parts := strings.Split(rel, string(filepath.Separator))
 	switch {
-	case rel == "berthd.sock", rel == "berthd.log", strings.HasPrefix(rel, "events.log"):
+	case rel == "berthd.sock", rel == "berthd.log", strings.HasPrefix(rel, "events.log"), rel == filepath.Join("backups", "offsite"):
 		return true
 	case len(parts) >= 3 && parts[0] == "apps" && (parts[2] == "repo.git" || parts[2] == "build" || parts[2] == "logs"):
 		return true
@@ -73,10 +73,24 @@ func WriteArchive(root, dest string) (int, error) {
 		return 0, err
 	}
 	defer os.Remove(tmp)
-	gz := gzip.NewWriter(f)
+	count, err := writeArchive(f, root)
+	if err == nil {
+		err = f.Close()
+	} else {
+		f.Close()
+	}
+	if err != nil {
+		return 0, err
+	}
+	return count, os.Rename(tmp, dest)
+}
+
+// writeArchive writes root (minus exclusions) to w as a .tar.gz.
+func writeArchive(w io.Writer, root string) (int, error) {
+	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	count := 0
-	err = filepath.WalkDir(root, func(path string, de fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, de fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -128,21 +142,30 @@ func WriteArchive(root, dest string) (int, error) {
 	if err == nil {
 		err = gz.Close()
 	}
-	if err == nil {
-		err = f.Close()
-	} else {
-		f.Close()
-	}
-	if err != nil {
-		return 0, err
-	}
-	return count, os.Rename(tmp, dest)
+	return count, err
 }
 
 // extractArchive unpacks into root, refusing paths that escape it. The
 // local config.json is merged rather than replaced: machine-specific
 // settings (hostname, gateway, launchd) stay those of this Mac.
-func extractArchive(archive, root string) error {
+func extractArchive(archive, root string) error { return extractFiltered(archive, root, nil) }
+
+// SeedFromArchive puts a backup's secrets and settings (config.json, merged
+// with this Mac's machine-specific values) in place before `berth init
+// --restore` sets up Cloudflare and GitHub, so init reuses the old Mac's
+// domain, tunnel and logins instead of asking for new ones. The rest comes
+// back with `berth restore` once berthd is running.
+func SeedFromArchive(archive string, store *state.Store) error {
+	err := extractFiltered(archive, store.Root, func(name string) bool {
+		return name == "config.json" || strings.HasPrefix(name, "secrets"+string(filepath.Separator))
+	})
+	if err != nil {
+		return err
+	}
+	return mergeRestoredConfig(store)
+}
+
+func extractFiltered(archive, root string, keep func(name string) bool) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -164,6 +187,9 @@ func extractArchive(archive, root string) error {
 		name := filepath.Clean(filepath.FromSlash(hdr.Name))
 		if strings.HasPrefix(name, "..") || filepath.IsAbs(name) {
 			return fmt.Errorf("archive entry %q escapes the berth directory", hdr.Name)
+		}
+		if keep != nil && !keep(name) {
+			continue
 		}
 		target := filepath.Join(root, name)
 		if name == "config.json" {
@@ -271,11 +297,23 @@ func (d *Daemon) hRestore(ctx context.Context, params json.RawMessage, out io.Wr
 	apps, _ := d.Store.Apps()
 	var failed []string
 	for _, a := range apps {
+		// A preview's database isn't in the dumps and its code isn't in the
+		// backup; it comes back from its pull request below.
+		if a.Preview > 0 {
+			d.destroyApp(ctx, a, false, io.Discard)
+			continue
+		}
+		// Redeploy the commit that was live, not whatever the branch has
+		// moved on to since.
+		liveSHA := ""
+		if cur := d.Store.CurrentRelease(a.Name); cur != nil {
+			liveSHA = cur.SHA
+		}
 		// Releases on the old Mac reference images and containers that do
 		// not exist here.
 		rs, _ := d.Store.Releases(a.Name)
 		for _, r := range rs {
-			r.Container = ""
+			r.Container, r.Workers = "", nil
 			if r.Status == state.StatusRunning || r.Status == state.StatusStarting {
 				r.Status = state.StatusStopped
 			}
@@ -284,20 +322,42 @@ func (d *Daemon) hRestore(ctx context.Context, params json.RawMessage, out io.Wr
 		}
 		os.Remove(d.Store.Path("apps", a.Name, "current"))
 		d.installHook(a)
-		if a.Repo == "" {
+		switch {
+		case a.DevOf != "":
+			fmt.Fprintf(out, "-----> %s is a dev version; the next `berth dev:push` from %s's repo brings it back\n", a.Name, a.DevOf)
+			continue
+		case a.Repo == "":
 			fmt.Fprintf(out, "-----> %s has no repo; push to it to deploy\n", a.Name)
 			continue
-		}
-		if a.Stopped {
+		case a.Stopped:
 			continue
 		}
-		if _, err := d.Deployer.Deploy(ctx, deployReq(a.Name, out)); err != nil {
+		req := deployReq(a.Name, out)
+		req.Ref = liveSHA
+		rel, err := d.Deployer.Deploy(ctx, req)
+		if err != nil && rel == nil && liveSHA != "" {
+			// The commit is gone from the repo (a force-push): its branch, then.
+			fmt.Fprintf(out, "       %s isn't in %s any more; deploying %s instead\n", liveSHA[:min(7, len(liveSHA))], a.Repo, a.Branch)
+			_, err = d.Deployer.Deploy(ctx, deployReq(a.Name, out))
+		}
+		if err != nil {
 			failed = append(failed, a.Name)
 			fmt.Fprintf(out, "       %s failed to deploy: %v\n", a.Name, err)
 		}
 	}
 	d.Apply(ctx)
 	d.ApplyTunnel(ctx, true)
+	for _, a := range apps {
+		if a.PreviewsOn {
+			go d.syncPreviews(d.ctx, a.Name)
+		}
+	}
+	if d.Store.AIConfigured() {
+		fmt.Fprintln(out, "-----> AI settings are back. If apps use local models, run `berth ai:setup` to install Ollama and download them")
+	}
+	if cfg.Hostname != "" {
+		fmt.Fprintf(out, "-----> LAN addresses now end in .%s.local\n", cfg.Hostname)
+	}
 	if len(failed) > 0 {
 		return nil, fmt.Errorf("restored, but these apps failed to deploy: %s", strings.Join(failed, ", "))
 	}

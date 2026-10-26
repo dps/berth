@@ -71,6 +71,9 @@ type Daemon struct {
 	authKey       ed25519.PrivateKey
 	stats         *analytics.Stats // request analytics from access logs; nil until Run
 	statusCache   statusCache
+	cronRunning   map[string]bool // app/job index → a run in progress
+	previewMu     map[string]*sync.Mutex
+	previewNoted  map[string]bool // preview@sha already told it's over the limit
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -90,6 +93,9 @@ func New(store *state.Store, rt runtime.Runtime) *Daemon {
 		tails:          map[string]context.CancelFunc{},
 		queued:         map[string]bool{},
 		hookHits:       map[string][]time.Time{},
+		cronRunning:    map[string]bool{},
+		previewMu:      map[string]*sync.Mutex{},
+		previewNoted:   map[string]bool{},
 		mdns:           newMDNS(),
 	}
 	d.Deployer = deploy.New(store, rt, d)
@@ -162,7 +168,7 @@ func (d *Daemon) event(ev state.Event) {
 	}
 	slog.Info(ev.Message, "kind", ev.Kind, "app", ev.App)
 	switch ev.Kind {
-	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed", "network":
+	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed", "network", "cron.failed", "offsite.failed":
 		go d.notify(ev)
 	}
 }
@@ -207,6 +213,9 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		if a.DevOf != "" {
 			r.NoIndex = true
 			r.DownBody = fmt.Sprintf("%s is asleep or stopped. Wake it with `berth dev:push` from %s's repo, or `berth start %s`.\n", a.Name, a.DevOf, a.Name)
+			if a.Preview > 0 {
+				r.DownBody = fmt.Sprintf("%s, the preview of pull request #%d, is asleep or stopped. A push to the pull request wakes it, as does `berth start %s`.\n", a.Name, a.Preview, a.Name)
+			}
 			tokens = map[string]string{}
 			if p := byName[a.DevOf]; p != nil {
 				for _, t := range p.DevTokens {
@@ -345,8 +354,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("listen %s: %w", sock, err)
 	}
 	os.Chmod(sock, 0o600)
+	// Served once the servers below have set up d.auth, d.ai and the rest,
+	// which handlers read without locks; until then connections wait.
 	ctlSrv := &http.Server{Handler: d.rpcHandler()}
-	go ctlSrv.Serve(ln)
 
 	hookLn, err := net.Listen("tcp", cfg.WebhookAddr)
 	if err != nil {
@@ -385,6 +395,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer adminSrv.Close()
+	go ctlSrv.Serve(ln)
 	slog.Info("berthd started", "version", Version, "home", d.Store.Root, "socket", sock, "webhooks", cfg.WebhookAddr)
 
 	go func() {
@@ -392,6 +403,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go d.superviseLoop(d.ctx)
 		go d.pollLoop(d.ctx)
 		go d.scheduleLoop(d.ctx)
+		go d.cronLoop(d.ctx)
 	}()
 
 	<-d.ctx.Done()
@@ -486,6 +498,9 @@ func (d *Daemon) removeOrphans(ctx context.Context, cs []runtime.Container) {
 		for _, r := range rs {
 			if r.Container != "" {
 				live[r.Container] = true
+			}
+			for _, w := range r.Workers {
+				live[w.Container] = true
 			}
 		}
 	}

@@ -173,3 +173,17 @@ func TestCloneURL(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestAllowEntries(t *testing.T) {
+	for _, ok := range []string{"a@gmail.com", "@family", "@example.com"} {
+		if err := ValidateAllowEntry(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	// Consumer Gmail has no Workspace domain, so @gmail.com would match nobody.
+	for _, bad := range []string{"@gmail.com", "@GoogleMail.com", "nope", "@Bad_Group"} {
+		if ValidateAllowEntry(bad) == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}

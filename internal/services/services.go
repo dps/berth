@@ -87,6 +87,9 @@ func dbName(name string) string { return strings.ReplaceAll(name, "-", "_") }
 // DevDB is the database a dev version gets in the parent's Postgres.
 func DevDB(service string) string { return dbName(service) + "_dev" }
 
+// PreviewDB is the database PR n's preview gets in the parent's Postgres.
+func PreviewDB(service string, n int) string { return fmt.Sprintf("%s_pr%d", dbName(service), n) }
+
 // linkDB is the database a link connects to.
 func linkDB(sv *state.Service, l state.Link) string {
 	if l.DB != "" {
@@ -448,8 +451,9 @@ GRANT CONNECT ON DATABASE %[3]s TO %[5]s;
 `, quoteIdent(db), quoteLit(db), quoteIdent(prod), quoteLit(prod+"_rw"), quoteIdent(prod+"_rw")))
 }
 
-// LinkDev links app (a dev version) to its own database in pg:name.
-func (m *Manager) LinkDev(ctx context.Context, name, app, envVar string) (string, error) {
+// LinkDev links app (a dev version or preview) to its own database db in
+// pg:name.
+func (m *Manager) LinkDev(ctx context.Context, name, app, envVar, db string) (string, error) {
 	sv, err := m.Store.Service("pg", name)
 	if err != nil {
 		return "", err
@@ -462,7 +466,7 @@ func (m *Manager) LinkDev(ctx context.Context, name, app, envVar string) (string
 	if !ok {
 		l = state.Link{Role: roleName(app), Password: Password()}
 	}
-	l.EnvVar, l.DB = envVar, DevDB(name)
+	l.EnvVar, l.DB = envVar, db
 	if err := m.applyGrants(ctx, sv, l); err != nil {
 		return "", err
 	}
@@ -479,7 +483,10 @@ func (m *Manager) DropDev(ctx context.Context, name, app string) error {
 	if err != nil {
 		return err
 	}
-	db := DevDB(name)
+	db := sv.Links[app].DB
+	if db == "" {
+		db = DevDB(name)
+	}
 	err = m.psql(ctx, sv, "postgres", fmt.Sprintf(`DROP DATABASE IF EXISTS %[1]s WITH (FORCE);
 DROP ROLE IF EXISTS %[2]s;
 DROP ROLE IF EXISTS %[3]s;`, quoteIdent(db), quoteIdent(roleName(app)), quoteIdent(db+"_rw")))

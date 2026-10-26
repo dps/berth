@@ -113,7 +113,10 @@ func TestSignInHostRefusesNamesWithTheirOwnDNS(t *testing.T) {
 	if err := d.checkSignInHost(ctx, d.cfg(), "signin.example.com"); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"a.b.example.com", "signin.other.com", "hooks.example.com"} {
+	// A custom domain's record is a tunnel CNAME, but the app's route
+	// would be shadowed.
+	d.Store.SaveApp(&state.App{Name: "blog", Repo: "o/r", Branch: "main", Domains: []string{"login.example.com"}})
+	for _, bad := range []string{"a.b.example.com", "signin.other.com", "hooks.example.com", "login.example.com"} {
 		if err := d.checkSignInHost(ctx, d.cfg(), bad); err == nil {
 			t.Errorf("accepted %s", bad)
 		}

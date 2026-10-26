@@ -20,7 +20,7 @@ import (
 )
 
 func cmdLogs() *cobra.Command {
-	var follow, all, access bool
+	var follow, all, access, cronLog bool
 	var n int
 	var since, build, release string
 	c := &cobra.Command{
@@ -31,6 +31,7 @@ func cmdLogs() *cobra.Command {
 			"  berth logs myapp --build        # latest build\n" +
 			"  berth logs myapp --build 12\n" +
 			"  berth logs myapp --release      # latest release command (migrations)\n" +
+			"  berth logs myapp --cron         # scheduled jobs from app.json\n" +
 			"  berth logs --all -f",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -87,6 +88,8 @@ func cmdLogs() *cobra.Command {
 						return err
 					}
 					srcs = append(srcs, src{"", p})
+				case cronLog:
+					srcs = append(srcs, src{"", s.Path("apps", app, "logs", "cron.log")})
 				case access:
 					logs := s.AccessLogs(app)
 					if len(logs) == 0 {
@@ -158,6 +161,7 @@ func cmdLogs() *cobra.Command {
 	c.Flags().StringVar(&release, "release", "", "show a release command's output (latest, or release number)")
 	c.Flags().Lookup("release").NoOptDefVal = "latest"
 	c.Flags().BoolVar(&access, "access", false, "show Caddy access logs")
+	c.Flags().BoolVar(&cronLog, "cron", false, "show scheduled jobs' output (app.json cron)")
 	c.Flags().BoolVar(&all, "all", false, "every app, prefixed with its name")
 	return c
 }

@@ -180,6 +180,14 @@ type DevToken struct {
 // DevName is the dev version of app.
 func DevName(app string) string { return app + "-dev" }
 
+// PreviewName is the app for pull request n's preview: <app>-pr-<n>.
+func PreviewName(app string, n int) string { return fmt.Sprintf("%s-pr-%d", app, n) }
+
+var previewNameRe = regexp.MustCompile(`-pr-[0-9]+$`)
+
+// IsPreviewName reports whether name has a preview's -pr-<n> suffix.
+func IsPreviewName(name string) bool { return previewNameRe.MatchString(name) }
+
 type BasicAuth struct {
 	User string `json:"user"`
 	Hash string `json:"hash"` // bcrypt
@@ -187,29 +195,46 @@ type BasicAuth struct {
 
 // App is apps/<app>/app.json.
 type App struct {
-	Name       string     `json:"name"`
-	Repo       string     `json:"repo"` // owner/name or a git URL/path
-	Branch     string     `json:"branch"`
-	Path       string     `json:"path,omitempty"` // monorepo subdirectory
-	Private    bool       `json:"private,omitempty"`
-	NoWebhook  bool       `json:"no_webhook,omitempty"`
-	Webhook    Webhook    `json:"webhook"`
-	Domains    []string   `json:"domains,omitempty"`
-	Mounts     []Mount    `json:"mounts,omitempty"`
-	Slots      []int      `json:"slots,omitempty"` // two fixed host ports; releases alternate between them
-	Links      []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
-	Auth       *BasicAuth `json:"auth,omitempty"`
-	Access     *Access    `json:"access,omitempty"` // sign-in policy; nil = none
-	DevOf      string     `json:"dev_of,omitempty"` // set on <app>-dev: the app it is the dev version of
-	DevOff     bool       `json:"dev_off,omitempty"`
-	DevTokens  []DevToken `json:"dev_tokens,omitempty"` // bearer tokens for the dev version (hashes)
-	AI         *AppAI     `json:"ai,omitempty"`         // access to the AI gateway
-	DeployKey  bool       `json:"deploy_key,omitempty"`
-	Stopped    bool       `json:"stopped,omitempty"`
-	PollETag   string     `json:"poll_etag,omitempty"`
-	LastSeen   string     `json:"last_seen,omitempty"`  // last branch head we acted on
-	Deliveries []string   `json:"deliveries,omitempty"` // recent webhook delivery ids
-	CreatedAt  time.Time  `json:"created_at"`
+	Name      string     `json:"name"`
+	Repo      string     `json:"repo"` // owner/name or a git URL/path
+	Branch    string     `json:"branch"`
+	Path      string     `json:"path,omitempty"` // monorepo subdirectory
+	Private   bool       `json:"private,omitempty"`
+	NoWebhook bool       `json:"no_webhook,omitempty"`
+	Webhook   Webhook    `json:"webhook"`
+	Domains   []string   `json:"domains,omitempty"`
+	Mounts    []Mount    `json:"mounts,omitempty"`
+	Slots     []int      `json:"slots,omitempty"` // two fixed host ports; releases alternate between them
+	Links     []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
+	Auth      *BasicAuth `json:"auth,omitempty"`
+	Access    *Access    `json:"access,omitempty"` // sign-in policy; nil = none
+	DevOf     string     `json:"dev_of,omitempty"` // set on <app>-dev: the app it is the dev version of
+	DevOff    bool       `json:"dev_off,omitempty"`
+	DevTokens []DevToken `json:"dev_tokens,omitempty"` // bearer tokens for the dev version (hashes)
+	// Preview is the pull request number on a PR preview (which also has
+	// DevOf set). On the parent, PreviewsOn turns them on and PreviewMax
+	// caps how many run at once.
+	Preview    int    `json:"preview,omitempty"`
+	PreviewsOn bool   `json:"previews_on,omitempty"`
+	PreviewMax int    `json:"preview_max,omitempty"`
+	AI         *AppAI `json:"ai,omitempty"` // access to the AI gateway
+	DeployKey  bool   `json:"deploy_key,omitempty"`
+	Stopped    bool   `json:"stopped,omitempty"`
+	// Scale is how many containers run per worker process type; a type
+	// that isn't listed runs one.
+	Scale      map[string]int `json:"scale,omitempty"`
+	PollETag   string         `json:"poll_etag,omitempty"`
+	LastSeen   string         `json:"last_seen,omitempty"`  // last branch head we acted on
+	Deliveries []string       `json:"deliveries,omitempty"` // recent webhook delivery ids
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+// WorkerCount is how many containers of process type t should run.
+func (a *App) WorkerCount(t string) int {
+	if n, ok := a.Scale[t]; ok {
+		return n
+	}
+	return 1
 }
 
 // IsGitHub reports whether Repo is a GitHub owner/name shorthand.
@@ -331,6 +356,28 @@ type Release struct {
 	// ran ("pg:name" → file), for `berth rollback --with-data`.
 	Backups map[string]string `json:"backups,omitempty"`
 	DataOf  int               `json:"data_of,omitempty"` // the release that was current when they were taken
+	// Processes are the Procfile's worker types (not web or release) →
+	// command, and Workers their running containers.
+	Processes map[string]string `json:"processes,omitempty"`
+	Workers   []Worker          `json:"workers,omitempty"`
+	// Cron is app.json's "cron" list when this release was built.
+	Cron []CronJob `json:"cron,omitempty"`
+}
+
+// Worker is one running container of a worker process type.
+type Worker struct {
+	Type      string `json:"type"`
+	Index     int    `json:"index"` // 1-based
+	Container string `json:"container"`
+}
+
+// Name is how logs and status show it: worker.1.
+func (w Worker) Name() string { return fmt.Sprintf("%s.%d", w.Type, w.Index) }
+
+// CronJob is a scheduled command (app.json, Dokku's format).
+type CronJob struct {
+	Command  string `json:"command"`
+	Schedule string `json:"schedule"`
 }
 
 // ContainerName is the per-release container name.

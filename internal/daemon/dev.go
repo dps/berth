@@ -14,6 +14,7 @@ import (
 	"github.com/dps/berth/internal/auth"
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/gitx"
+	"github.com/dps/berth/internal/services"
 	"github.com/dps/berth/internal/state"
 )
 
@@ -28,25 +29,34 @@ const devOwnersGroup = "owners"
 
 // ensureDev returns parent's dev version, creating it on first use.
 func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer) (*state.App, error) {
-	if parent.DevOf != "" {
-		return nil, fmt.Errorf("%s is itself a dev version", parent.Name)
-	}
 	if parent.DevOff {
 		return nil, fmt.Errorf("dev versions are off for %s (berth dev:on %s)", parent.Name, parent.Name)
 	}
-	name := state.DevName(parent.Name)
+	return d.ensureChild(ctx, parent, 0, out)
+}
+
+// ensureChild returns parent's dev version (pr 0) or the preview of pull
+// request pr, creating it with its own data on first use.
+func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out io.Writer) (*state.App, error) {
+	kind, name, branch := "dev version", state.DevName(parent.Name), devRef
+	if pr > 0 {
+		kind, name, branch = "preview", state.PreviewName(parent.Name, pr), previewRef(pr)
+	}
+	if parent.DevOf != "" {
+		return nil, fmt.Errorf("%s is itself a dev version or preview", parent.Name)
+	}
 	if a, err := d.Store.App(name); err == nil {
 		if a.DevOf != parent.Name {
-			return nil, fmt.Errorf("an app called %s already exists, so %s can't have a dev version", name, parent.Name)
+			return nil, fmt.Errorf("an app called %s already exists, so %s can't have that %s", name, parent.Name, kind)
 		}
 		return a, nil
 	}
 	if err := state.ValidateAppName(name); err != nil {
-		return nil, fmt.Errorf("%s's name is too long for a dev version (%s)", parent.Name, name)
+		return nil, fmt.Errorf("%s's name is too long for a %s (%s)", parent.Name, kind, name)
 	}
 	cfg := d.cfg()
 	dev := &state.App{
-		Name: name, Branch: devRef, Path: parent.Path, DevOf: parent.Name,
+		Name: name, Branch: branch, Path: parent.Path, DevOf: parent.Name, Preview: pr,
 		NoWebhook: true, Private: parent.Private,
 		Webhook:   state.Webhook{Secret: randomHex(32)},
 		CreatedAt: time.Now(),
@@ -84,19 +94,30 @@ func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer
 	if err := d.Store.SaveApp(dev); err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(out, "-----> Creating %s, the dev version of %s (its own data; config copied from %s)\n", name, parent.Name, parent.Name)
+	fmt.Fprintf(out, "-----> Creating %s, the %s of %s (its own data; config copied from %s)\n", name, kind, parent.Name, parent.Name)
 	for _, l := range links {
 		switch l.kind {
 		case "pg":
-			url, err := d.Services.LinkDev(ctx, l.name, name, l.envVar)
+			db := services.DevDB(l.name)
+			if pr > 0 {
+				db = services.PreviewDB(l.name, pr)
+			}
+			url, err := d.Services.LinkDev(ctx, l.name, name, l.envVar, db)
 			if err != nil {
-				return nil, fmt.Errorf("dev database in pg:%s: %w", l.name, err)
+				return nil, fmt.Errorf("%s database in pg:%s: %w", kind, l.name, err)
 			}
 			env[l.envVar] = url
 			dev.Links = append(dev.Links, "pg:"+l.name)
-			fmt.Fprintf(out, "-----> %s → database %s_dev in pg:%s (empty; berth dev:db:copy %s copies production's)\n", l.envVar, strings.ReplaceAll(l.name, "-", "_"), l.name, parent.Name)
+			if pr > 0 {
+				fmt.Fprintf(out, "-----> %s → database %s in pg:%s (empty; the release command sets it up)\n", l.envVar, db, l.name)
+			} else {
+				fmt.Fprintf(out, "-----> %s → database %s in pg:%s (empty; berth dev:db:copy %s copies production's)\n", l.envVar, db, l.name, parent.Name)
+			}
 		case "redis":
 			svName := state.DevName(l.name)
+			if pr > 0 {
+				svName = state.PreviewName(l.name, pr)
+			}
 			if _, err := d.Store.Service("redis", svName); err != nil {
 				if _, err := d.Services.Create(ctx, "redis", svName, "", "128M", out); err != nil {
 					return nil, fmt.Errorf("dev Redis: %w", err)
@@ -123,7 +144,11 @@ func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer
 	if err := d.Apply(ctx); err != nil {
 		fmt.Fprintf(out, "       warning: proxy update failed: %v\n", err)
 	}
-	d.event(state.Event{Kind: "dev.create", App: name, Message: "dev version of " + parent.Name + " created"})
+	if pr > 0 {
+		d.event(state.Event{Kind: "preview.create", App: name, Message: fmt.Sprintf("preview of %s for pull request #%d created", parent.Name, pr)})
+	} else {
+		d.event(state.Event{Kind: "dev.create", App: name, Message: "dev version of " + parent.Name + " created"})
+	}
 	return dev, nil
 }
 
@@ -140,7 +165,7 @@ func (d *Daemon) dropDevServices(ctx context.Context, dev *state.App, out io.Wri
 					fmt.Fprintf(out, "-----> Dropped the dev database in pg:%s\n", name)
 				}
 			}
-		case kind == "redis" && strings.HasSuffix(name, "-dev"):
+		case kind == "redis" && (strings.HasSuffix(name, "-dev") || state.IsPreviewName(name)):
 			if sv, err := d.Store.Service("redis", name); err == nil && len(sv.Links) == 1 {
 				if _, ok := sv.Links[dev.Name]; ok {
 					d.Services.Destroy(ctx, "redis", name, false)

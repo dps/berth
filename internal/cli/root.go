@@ -109,9 +109,10 @@ func NewRoot() *cobra.Command {
 		cmdDomainsAdd(), cmdDomainsRemove(), cmdDomainsList(),
 		cmdAuthSet(), cmdAuthUnset(), cmdAccess(),
 		cmdStorageMount(), cmdStorageUnmount(), cmdStorageList(),
-		cmdRun(), cmdExec(), cmdDockerfile(), cmdGitRemote(), cmdSetKey(), cmdSetRepo())
-	root.AddGroup(&cobra.Group{ID: "dev", Title: "Dev versions (<app>-dev.<domain>; app commands also work on <app>-dev):"})
-	add("dev", cmdDevPush(), cmdDevToken(), cmdDevDBCopy(), cmdDevReset(), cmdDevAgents(), cmdDevOnOff(true), cmdDevOnOff(false), cmdDevDeploy())
+		cmdRun(), cmdExec(), cmdScale(), cmdCron(), cmdCronRun(), cmdDockerfile(), cmdGitRemote(), cmdSetKey(), cmdSetRepo())
+	root.AddGroup(&cobra.Group{ID: "dev", Title: "Dev versions and previews (<app>-dev, <app>-pr-<n>; app commands work on them too):"})
+	add("dev", cmdDevPush(), cmdDevToken(), cmdDevDBCopy(), cmdDevReset(), cmdDevAgents(), cmdDevOnOff(true), cmdDevOnOff(false), cmdDevDeploy(),
+		cmdPreviews(), cmdPreviewsOn(), cmdPreviewsOff())
 	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in and admin page:"})
 	add("signin", cmdAuthSetup(), cmdAuthStatus(), cmdAuthGroup(), cmdAuthSessions(), cmdAuthRevoke())
 	add("signin", cmdAdmin(), cmdAdminEnable(), cmdAdminDisable())
@@ -120,7 +121,8 @@ func NewRoot() *cobra.Command {
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),
-		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUninstall())
+		cmdOffsiteSetup(), cmdOffsiteStatus(), cmdOffsiteRun(), cmdOffsiteGet(), cmdOffsiteKey(), cmdOffsiteOff(),
+		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUpgrade(), cmdUninstall())
 	root.AddCommand(cmdInfo())
 	return root
 }
@@ -130,6 +132,10 @@ func Execute() int {
 	root := NewRoot()
 	if code, ok := forward(root, os.Args[1:]); ok {
 		return code
+	}
+	// Run over SSH from another machine's CLI: say if the versions differ.
+	if w := versionSkew(os.Getenv("BERTH_CLIENT_VERSION"), Version); w != "" {
+		fmt.Fprintf(os.Stderr, " !     %s\n", w)
 	}
 	if err := root.Execute(); err != nil {
 		return printErr(err)

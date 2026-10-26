@@ -8,7 +8,7 @@ micro-VM on a Mac in your closet. Postgres is one command away.
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth
-brew install --HEAD berth
+brew install berth
 
 berth init --domain example.com           # once: tunnel, proxy, background services
 berth create myapp --repo you/myapp       # once per app: webhook, hostname, first deploy
@@ -41,10 +41,12 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [Logs, status and events](#logs-status-and-events)
 - [Databases: Postgres and Redis](#databases-postgres-and-redis)
 - [Database migrations](#database-migrations)
+- [Workers and scheduled jobs](#workers-and-scheduled-jobs)
 - [Persistent storage](#persistent-storage)
 - [Hostnames, custom domains and access control](#hostnames-custom-domains-and-access-control)
 - [Sign in with Google](#sign-in-with-google)
 - [Dev versions for agents](#dev-versions-for-agents)
+- [Pull request previews](#pull-request-previews)
 - [AI for your apps](#ai-for-your-apps)
 - [The admin page](#the-admin-page)
 - [One-off commands and shells](#one-off-commands-and-shells)
@@ -78,7 +80,7 @@ Homebrew installs the rest: Apple's
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth
-brew install --HEAD berth
+brew install berth
 berth init --domain example.com
 ```
 
@@ -345,6 +347,7 @@ Variables starting with `BERTH_` tune Berth itself and are not passed to your ap
 | `BERTH_RELEASE_COMMAND` | Procfile `release:` | command run before each release, e.g. migrations ([more](#database-migrations)) |
 | `BERTH_RELEASE_TIMEOUT` | `600` | seconds the release command may take |
 | `BERTH_RELEASE_BACKUP` | `on` | `off` skips the Postgres backup before the release command |
+| `BERTH_CRON_TIMEOUT` | `3600` | seconds a [scheduled job](#scheduled-jobs) may run |
 | `PORT` | `8080` | the port your app listens on inside its container |
 
 ## Logs, status and events
@@ -356,6 +359,7 @@ berth logs myapp --since 30m -n 1000
 berth logs myapp --build           # the latest build's output (or --build 12)
 berth logs myapp --release         # the latest release command's output (migrations)
 berth logs myapp --access          # one line per HTTP request
+berth logs myapp --cron            # scheduled jobs' output
 berth logs --all -f                # every app, prefixed with its name
 ```
 
@@ -526,6 +530,70 @@ The last 14 pre-release backups per app are kept in
 on every deploy, `berth config:set myapp BERTH_RELEASE_BACKUP=off` skips it
 (and `--with-data` then has nothing to restore).
 
+## Workers and scheduled jobs
+
+### Workers
+
+Background processes go in the `Procfile` next to the web process:
+
+```
+web: node server.js
+worker: node worker.js
+clock: node clock.js
+```
+
+Every process type other than `web` and `release` runs as a worker: its own
+container from the same build and config, with no URL, restarted with backoff
+if it exits. Workers move to each new release as it goes live (the old
+release's workers stop first, so no job is picked up twice), follow rollbacks,
+and stop and start with the app. The web process is still required; the
+image's own command is the web process.
+
+```bash
+berth ps:scale myapp worker=3      # three worker containers
+berth ps:scale myapp clock=0       # none
+berth status myapp                 # each worker and how long it's been up
+berth logs myapp -f                # worker lines are marked: v4 worker.2: …
+```
+
+Each worker counts against the Mac's memory like an app (`BERTH_MEMORY`).
+
+### Scheduled jobs
+
+Put a `cron` list in `app.json` at the root of the repo, in
+[Dokku's format](https://dokku.com/docs/processes/scheduled-cron-tasks/):
+
+```json
+{
+  "cron": [
+    { "command": "node digest.js", "schedule": "0 7 * * *" },
+    { "command": "python cleanup.py", "schedule": "@hourly" }
+  ]
+}
+```
+
+Schedules are five-field cron expressions (minute hour day month weekday,
+with ranges, steps, lists and names like `mon-fri`) or `@hourly`, `@daily`,
+`@weekly`, `@monthly`, in the Mac's local time. They deploy with the code, so
+a rollback brings back the schedule that went with it, and a malformed one
+fails the deploy instead of being skipped quietly.
+
+Each run is a fresh container from the current release, with the app's
+config and storage mounts. A job still running when its next run is due is
+skipped, a failure is an event (and a notification), and `BERTH_CRON_TIMEOUT`
+(default an hour) stops runaway jobs. Runs missed while the Mac was off are
+not made up.
+
+```bash
+berth cron myapp                   # the jobs, their next run and how the last went
+berth cron:run myapp 1             # run job 1 now and wait for it
+berth logs myapp --cron            # every run's output
+```
+
+Dev versions and previews don't run schedules, since a job on a copy of
+production's data could email real people; try one by hand with
+`berth cron:run myapp-dev 1`.
+
 ## Persistent storage
 
 Container filesystems are reset on every deploy. For SQLite files, uploads or
@@ -622,7 +690,9 @@ berth access myapp off                         # no sign-in at all
 ```
 
 `allow` takes emails, Google Workspace domains (`@example.com`, which Google
-vouches for) and groups. Define a group once and use it in any app:
+vouches for) and groups. `@gmail.com` is refused: personal Google accounts
+have no domain for Google to vouch for, so it would match nobody. Use
+`signed-in` for any Google account. Define a group once and use it in any app:
 
 ```bash
 berth auth:group family alice@gmail.com bob@gmail.com
@@ -750,6 +820,36 @@ On a laptop, `berth dev:push` in the repo pushes the snapshot over SSH and
 runs the deploy on the Mac, with the same exit codes and `--json` output. It
 needs the repo's `berth` remote: see
 [Working from another machine](#working-from-another-machine).
+
+## Pull request previews
+
+```bash
+berth previews:on myapp
+```
+
+Each open pull request into the app's branch then gets its own app,
+`myapp-pr-<number>`, at `https://myapp-pr-12.<your domain>`: built from the
+pull request's latest commit, redeployed on every push to it, and destroyed
+when it's merged or closed. A check on the pull request links to it, with a
+comment the first time.
+
+Previews work like [dev versions](#dev-versions-for-agents): they start
+with the app's config, get their own empty databases (the release command
+sets them up), run workers but not scheduled jobs, sleep when idle, and sit
+behind the same access rule (the `@owners` group with sign-in, LAN only
+without), so dev tokens work on them too.
+
+- Pull requests from **forks** never get a preview: that would run a
+  stranger's code on your Mac.
+- At most 3 run at once (`--max 5` changes that); a pull request over the
+  limit gets a check saying so.
+- They follow GitHub's pull request webhook, with a check every 5 minutes for
+  anything missed. They need a GitHub repo and Berth's GitHub login.
+
+```bash
+berth previews myapp       # the previews and their state
+berth previews:off myapp   # stop, and destroy the ones there are
+```
 
 ## AI for your apps
 
@@ -917,8 +1017,8 @@ Berth is built to run for months with no one at the screen.
   checks in a row fail, it restarts the container system, which takes the apps
   down for about 6 seconds, and notifies you. Set `"auto_heal_network": false`
   in `~/.berth/config.json` to only be notified.
-- **Upgrades are hands-off.** `brew upgrade --fetch-HEAD berth` replaces the
-  binaries (plain `brew upgrade` skips `--HEAD` installs); the
+- **Upgrades are hands-off.** `berth upgrade` upgrades Berth the way it was
+  installed (`--check` just compares versions with the latest release); the
   running `berthd` notices, waits for any deploy in progress, and restarts
   itself. Apps keep running throughout.
 
@@ -929,8 +1029,9 @@ berth notify:set https://hooks.slack.com/services/…    # Slack, Discord or ntf
 berth notify:set off
 ```
 
-You're notified when a deploy succeeds or fails, when an app is stuck
-crash-looping, and when a nightly backup fails. `notify:set` sends a test
+You're notified when a deploy succeeds or fails, when an app or worker is
+stuck crash-looping, when a scheduled job fails, and when a nightly or
+off-Mac backup fails. `notify:set` sends a test
 message first.
 
 ### Reboots and FileVault
@@ -984,8 +1085,12 @@ Inside an app's repo, the `berth` git remote does the same job as
 `BERTH_HOST`, so an agent working there needs nothing set. `berth new` adds
 it; for an existing clone, run `berth git:remote myapp` once in the repo.
 
+If the laptop's CLI and the Mac's Berth are different versions, commands
+say so; `berth upgrade` on the laptop upgrades it and then offers to
+upgrade the Mac.
+
 A few commands do their work on the laptop instead: `berth new` and
-`dev:push` (they use the files here), `git:remote` (it adds the remote here),
+`dev:push` (they use the files here), `upgrade`, `git:remote` (it adds the remote here),
 `admin` (it opens the page in your browser here), and `config:import`, which
 sends the laptop's `.env` file. Any other path you pass, as in
 `berth pg:restore db dump.sql`, is a path on the Mac.
@@ -1009,9 +1114,62 @@ berth init --domain example.com      # on a Mac with no apps yet
 berth restore berth-backup.tar.gz
 ```
 
-Berth recreates the databases from their dumps, restores the storage folders,
-and redeploys every app from its repository. Apps created without a repo come
-back with their settings; push to them to deploy.
+Everything comes back: each app's settings, config, domains, access rules,
+workers and AI access; sign-in groups and sessions; Postgres and Redis from
+their dumps; storage folders; and the GitHub, Cloudflare and Google
+credentials. Every app is redeployed from its repository at the commit that
+was live. Apps created without a repo come back with their settings (push to
+them to deploy), dev versions return on their next `dev:push`, previews with
+their pull requests, and local AI models with `berth ai:setup`. LAN addresses
+change to the new Mac's name. With [off-Mac backups](#off-mac-backups) it's
+one command; see below.
+
+### Off-Mac backups
+
+The archive above lives on the Mac. To survive a dead disk or a stolen Mac,
+send one somewhere else every night:
+
+```bash
+berth offsite:setup --r2 <cloudflare account id> --bucket my-berth-backups
+```
+
+After the 03:00 database dumps, Berth makes the same archive as
+`berth backup`, encrypts it on the Mac, uploads it, checks it arrived whole,
+and keeps the newest 14 (`--keep`). Any S3-compatible storage works: for
+Cloudflare R2, create a bucket and an R2 API token with *Object Read & Write*
+on it; elsewhere, pass `--endpoint` (Backblaze B2, AWS S3, MinIO). Setup
+writes, reads, lists and deletes a test file first, and asks for the secret
+key without echoing it.
+
+Setup prints a **recovery code** (`berthrestore_…`): the bucket's address and
+credentials and the key that encrypts the backups, in one string. **Save it
+somewhere other than the Mac**, such as a password manager. The storage
+provider only ever sees ciphertext, and without the code nobody can read the
+backups, including you. `berth offsite:key` prints it again; it changes if
+you run setup with new credentials.
+
+```bash
+berth offsite:status                 # where they go, the last upload, what's in the bucket
+berth offsite:run                    # upload one now
+berth offsite:get                    # download and decrypt the latest, ready for berth restore
+berth offsite:off                    # stop (the bucket keeps its backups)
+```
+
+**Moving to a new Mac** is then one command, once Homebrew and Berth are
+installed:
+
+```bash
+berth init --restore                 # asks for the recovery code
+```
+
+It fetches the newest backup, puts the old Mac's settings and logins in place
+(so there's no `--domain`, and no Cloudflare or GitHub login in the browser:
+the same tunnel and token are reused), finishes setting up, then restores
+every database and app as above. Turn the old Mac's Berth off first
+(`berth uninstall`), or the two will share the tunnel and split the traffic.
+
+`berth status` warns when no upload has worked for two days, and a failed one
+sends a notification.
 
 ### Uninstalling
 
@@ -1026,6 +1184,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | --- | --- |
 | **Setup** | |
 | `berth init --domain d` | one-time setup; safe to re-run (flags above) |
+| `berth init --restore` | set up a new Mac from your off-Mac backups |
 | `berth doctor [--images]` | check everything and print fixes |
 | `berth cf:login <zone>` | connect another Cloudflare zone (browser login), for custom domains |
 | `berth trust-ca` | trust Caddy's local CA in your login keychain |
@@ -1042,6 +1201,8 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth git:remote <app> [--host h]` | add a `berth` remote for `git push berth`, `dev:push` and running commands from another machine |
 | `berth app:set-key <app>` | use an SSH deploy key for this repo |
 | `berth app:set-repo <app> <repo> [--branch b]` | deploy from another repo or branch |
+| `berth ps:scale <app> <type>=<n>…` | run n containers of a Procfile worker type |
+| `berth cron <app>` · `cron:run <app> <n>` | scheduled jobs from `app.json`; run one now |
 | **Config** | |
 | `berth config:set <app> K=v … [--no-restart] [--build-arg]` | set variables and redeploy |
 | `berth config:unset <app> K …` | remove variables |
@@ -1049,7 +1210,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth config:show <app> [--reveal] [--shell]` | list variables |
 | `berth config:import <app> <file\|-> [--replace]` | load a `.env` file (`-` reads stdin) |
 | **Logs** | |
-| `berth logs <app> [-f] [-n N] [--since d] [--build [n]] [--release [n]] [--access]` | app, build, release-command or access logs |
+| `berth logs <app> [-f] [-n N] [--since d] [--build [n]] [--release [n]] [--access] [--cron]` | app, build, release-command, access or scheduled-job logs |
 | `berth logs --all [-f]` | every app's logs |
 | `berth status [app]` | overview |
 | `berth events [-f]` | event log |
@@ -1058,6 +1219,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth auth:set <app> user:pass` · `berth auth:unset <app>` | basic auth |
 | `berth dev:push [app] [--json]` | deploy the working tree to `<app>-dev` |
 | `berth dev:token <app> [--as email] [--revoke]` · `dev:db:copy` · `dev:reset` · `dev:agents` · `dev:off` · `dev:on` | dev versions |
+| `berth previews <app>` · `previews:on <app> [--max n]` · `previews:off <app>` | pull request previews |
 | `berth access <app> [path] [public \| signed-in \| allow who... \| off] [--remove]` | Google sign-in policy |
 | `berth auth:setup google [--host h]` · `auth:status` · `auth:group <name> [who...]` · `auth:sessions` · `auth:revoke <email>` | sign-in setup, groups, sessions |
 | **Admin page** | |
@@ -1078,6 +1240,8 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | **Operations** | |
 | `berth gc` | clean up old images, dumps and build files |
 | `berth backup [file]` · `berth restore <file>` | archive and restore everything |
+| `berth offsite:setup` · `offsite:status` · `offsite:run` · `offsite:get [backup]` · `offsite:key` · `offsite:off` | encrypted nightly backups to S3-compatible storage; `offsite:key` prints the recovery code |
+| `berth upgrade [--check]` | upgrade Berth here (and, from a laptop, on the Mac) |
 | `berth notify:set <url\|off>` | deploy and crash notifications |
 | `berth reboot` | planned reboot that comes back unattended |
 | `berth reload` | re-apply `~/.berth` after editing files by hand |
@@ -1175,12 +1339,14 @@ All state is plain files you can read:
   apps/<app>/app.json      repo, branch, mounts, links, domains
   apps/<app>/env           live config (mode 0600)
   apps/<app>/releases/     one JSON file per release
-  apps/<app>/logs/         app.log, build-<n>.log, release-<n>.log, access.<created>.log
+  apps/<app>/logs/         app.log, build-<n>.log, release-<n>.log, cron.log, access.<created>.log
+  apps/<app>/cron.json     each scheduled job's last run
   services/<kind>/<name>/  database settings
   backups/                 database dumps
   data/apps/<app>/         storage:mount folders
   secrets/                 tokens and tunnel credentials (mode 0700)
   logs/                    berthd, Caddy and cloudflared logs
+  offsite.json             the last off-Mac backup (its settings are in secrets/)
   events.log               the event log
 ```
 
@@ -1214,6 +1380,13 @@ requests as a test viewer, then open http://127.0.0.1:7799:
 ```bash
 BERTH_ADMIN_PREVIEW=7799 BERTH_ADMIN_PREVIEW_SECS=600 go test ./internal/daemon -run TestAdminPreview
 ```
+
+The S3 client has a test against a real S3-compatible server, skipped unless
+`BERTH_S3_TEST=<endpoint>,<bucket>,<access key>,<secret>` is set;
+`internal/offsite/live_test.go` shows how to run one with rclone.
+
+Releases are tagged with `scripts/release.sh v0.2.0`, which tags, pushes, and
+points the Homebrew formula at the new tarball.
 
 ## License
 

@@ -18,21 +18,32 @@ import (
 )
 
 type AppStatus struct {
-	Name        string      `json:"name"`
-	State       string      `json:"state"` // running, stopped, crashed, deploying, new
-	Release     int         `json:"release,omitempty"`
-	SHA         string      `json:"sha,omitempty"`
-	Message     string      `json:"message,omitempty"`
-	Since       time.Time   `json:"since,omitempty"`
-	MemoryBytes int64       `json:"memory_bytes,omitempty"`
-	MemoryLimit string      `json:"memory_limit"`
-	HostPort    int         `json:"host_port,omitempty"`
-	URLs        []string    `json:"urls"`
-	Repo        string      `json:"repo,omitempty"`
-	Branch      string      `json:"branch,omitempty"`
-	Private     bool        `json:"private,omitempty"`
-	LastDeploy  *DeployInfo `json:"last_deploy,omitempty"`
-	Links       []string    `json:"links,omitempty"`
+	Name        string          `json:"name"`
+	State       string          `json:"state"` // running, stopped, crashed, deploying, new
+	Release     int             `json:"release,omitempty"`
+	SHA         string          `json:"sha,omitempty"`
+	Message     string          `json:"message,omitempty"`
+	Since       time.Time       `json:"since,omitempty"`
+	MemoryBytes int64           `json:"memory_bytes,omitempty"`
+	MemoryLimit string          `json:"memory_limit"`
+	HostPort    int             `json:"host_port,omitempty"`
+	URLs        []string        `json:"urls"`
+	Repo        string          `json:"repo,omitempty"`
+	Branch      string          `json:"branch,omitempty"`
+	Private     bool            `json:"private,omitempty"`
+	LastDeploy  *DeployInfo     `json:"last_deploy,omitempty"`
+	Links       []string        `json:"links,omitempty"`
+	Workers     []ProcessStatus `json:"workers,omitempty"`
+	CronJobs    int             `json:"cron_jobs,omitempty"`
+}
+
+// ProcessStatus is one worker container (worker.1).
+type ProcessStatus struct {
+	Name        string    `json:"name"`
+	Command     string    `json:"command"`
+	Running     bool      `json:"running"`
+	Since       time.Time `json:"since,omitempty"`
+	MemoryBytes int64     `json:"memory_bytes,omitempty"`
 }
 
 type DeployInfo struct {
@@ -208,6 +219,18 @@ func (d *Daemon) Status(ctx context.Context) (*Status, error) {
 			if as.State == "running" || as.State == "deploying" {
 				sys.MemCommitted += ParseMemory(as.MemoryLimit)
 			}
+			as.CronJobs = len(cur.Cron)
+			for _, w := range cur.Workers {
+				ps := ProcessStatus{Name: w.Name(), Command: cur.Processes[w.Type]}
+				if c, ok := runtime.Find(cs, w.Container); ok && c.Running() {
+					ps.Running, ps.Since = true, c.StartedAt
+					sys.MemCommitted += ParseMemory(as.MemoryLimit)
+				}
+				if s, ok := stats[w.Container]; ok {
+					ps.MemoryBytes = s.MemoryBytes
+				}
+				as.Workers = append(as.Workers, ps)
+			}
 		}
 		st.Apps = append(st.Apps, as)
 	}
@@ -272,6 +295,9 @@ func (d *Daemon) warnings(cfg *state.Config, st *Status) []string {
 	}
 	if !cfg.Unattended && sys.FileVault == "on" {
 		w = append(w, "FileVault is on: after a power cut the Mac waits for a password before apps return (use a UPS, or see Reboots and FileVault in the docs)")
+	}
+	if ow := d.offsiteWarning(); ow != "" {
+		w = append(w, ow)
 	}
 	for _, a := range st.Apps {
 		if a.State == "crashed" {

@@ -29,6 +29,9 @@ const (
 	loginTTL      = 10 * time.Minute
 	codeTTL       = 60 * time.Second
 	maxPending    = 10_000
+	// maxStartsPerIP caps new sign-ins per client per minute, so one
+	// client can't fill the pending table and crowd out everyone else.
+	maxStartsPerIP = 30
 )
 
 // Site is an app hostname with an access policy.
@@ -79,6 +82,7 @@ type Server struct {
 	logins   map[string]*login // by sha256(nonce)
 	oauth    map[string]*oauthState
 	codes    map[string]*handoff
+	starts   map[string][]time.Time // client IP → recent sign-in starts
 }
 
 func NewServer(sessions *Sessions, key ed25519.PrivateKey) *Server {
@@ -86,6 +90,7 @@ func NewServer(sessions *Sessions, key ed25519.PrivateKey) *Server {
 		Sessions: sessions, Key: key,
 		sites: map[string]Site{}, groups: map[string][]string{},
 		logins: map[string]*login{}, oauth: map[string]*oauthState{}, codes: map[string]*handoff{},
+		starts: map[string][]time.Time{},
 	}
 }
 
@@ -360,11 +365,16 @@ func (s *Server) appLogin(w http.ResponseWriter, r *http.Request, host string) {
 	nonce := token()
 	n := hashOf(nonce)
 	s.mu.Lock()
+	limited := s.tooManyStartsLocked(r)
 	full := s.pruneLocked() >= maxPending
-	if !full {
+	if !full && !limited {
 		s.logins[n] = &login{host: host, ret: ret, exp: time.Now().Add(loginTTL)}
 	}
 	s.mu.Unlock()
+	if limited {
+		http.Error(w, "too many sign-ins from your address; try again in a minute", http.StatusTooManyRequests)
+		return
+	}
 	if full {
 		http.Error(w, "too many sign-ins in progress; try again shortly", http.StatusServiceUnavailable)
 		return
@@ -482,11 +492,16 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, authHost string) 
 	}
 	st, verifier, nonce := token(), token(), token()
 	s.mu.Lock()
+	limited := s.tooManyStartsLocked(r)
 	full := s.pruneLocked() >= maxPending
-	if !full {
+	if !full && !limited {
 		s.oauth[st] = &oauthState{host: host, n: n, verifier: verifier, nonce: nonce, exp: time.Now().Add(loginTTL)}
 	}
 	s.mu.Unlock()
+	if limited {
+		http.Error(w, "too many sign-ins from your address; try again in a minute", http.StatusTooManyRequests)
+		return
+	}
 	if full {
 		http.Error(w, "too many sign-ins in progress; try again shortly", http.StatusServiceUnavailable)
 		return
@@ -495,6 +510,39 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, authHost string) 
 	sum := sha256.Sum256([]byte(verifier))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, p.AuthURL("https://"+authHost+"/callback", st, nonce, base64.RawURLEncoding.EncodeToString(sum[:]), switchAcct), http.StatusFound)
+}
+
+// tooManyStartsLocked records a sign-in start from r's client and reports
+// whether it has started more than maxStartsPerIP in the last minute.
+func (s *Server) tooManyStartsLocked(r *http.Request) bool {
+	ip := clientIP(r)
+	now := time.Now()
+	recent := s.starts[ip][:0]
+	for _, t := range s.starts[ip] {
+		if now.Sub(t) < time.Minute {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) >= maxStartsPerIP {
+		s.starts[ip] = recent
+		return true
+	}
+	s.starts[ip] = append(recent, now)
+	return false
+}
+
+// clientIP is the visitor's address: Cloudflare's header through the
+// tunnel, else the one Caddy forwards from the LAN.
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("Cf-Connecting-Ip"); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ip, _, _ := strings.Cut(xff, ",")
+		return strings.TrimSpace(ip)
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return host
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request, authHost string) {
@@ -562,6 +610,11 @@ func (s *Server) pruneLocked() int {
 	for k, v := range s.codes {
 		if now.After(v.exp) {
 			delete(s.codes, k)
+		}
+	}
+	for ip, ts := range s.starts {
+		if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= time.Minute {
+			delete(s.starts, ip)
 		}
 	}
 	return len(s.logins) + len(s.oauth) + len(s.codes)

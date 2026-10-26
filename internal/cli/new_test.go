@@ -126,7 +126,7 @@ func TestCommandsRunOnTheBerthMacOverSSH(t *testing.T) {
 	if code, ok := forward(NewRoot(), []string{"logs", "demo", "-n", "5"}); !ok || code != 0 {
 		t.Fatalf("forward: %d %v", code, ok)
 	}
-	if log := readLog(t, logPath); !strings.Contains(log, "-- me@mini.local PATH=/opt/homebrew/bin:/usr/local/bin:$PATH berth 'logs' 'demo' '-n' '5'") {
+	if log := readLog(t, logPath); !strings.Contains(log, "-- me@mini.local PATH=/opt/homebrew/bin:/usr/local/bin:$PATH BERTH_CLIENT_VERSION='dev' berth 'logs' 'demo' '-n' '5'") {
 		t.Fatalf("ssh got:\n%s", log)
 	}
 	// Commands that work here, or reach the Mac themselves, aren't forwarded.

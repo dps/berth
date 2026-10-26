@@ -30,6 +30,10 @@ func (d *Daemon) startAuth(cfg *state.Config) (*http.Server, error) {
 	d.authKey = key
 	d.auth = auth.NewServer(auth.OpenSessions(d.Store.Path("auth", "sessions.json")), key)
 	d.configureAuth()
+	if cfg.AuthAddr == "" {
+		// Caddy would have nowhere to ask about access policies.
+		return nil, fmt.Errorf("auth_addr is empty in config.json (default 127.0.0.1:7781)")
+	}
 	ln, err := net.Listen("tcp", cfg.AuthAddr)
 	if err != nil {
 		return nil, fmt.Errorf("sign-in listener %s: %w", cfg.AuthAddr, err)
@@ -100,6 +104,14 @@ func (d *Daemon) checkBerthHost(ctx context.Context, cfg *state.Config, host, ki
 	}
 	if ac, _ := d.Store.AuthConfig(); ac != nil && (kind == "signin" && host == ac.AdminHost || kind == "admin" && host == ac.Host) {
 		return fmt.Errorf("%s is already used by Berth; pick another with --host", host)
+	}
+	// A custom domain's DNS record is a tunnel CNAME, so the check below
+	// would pass it, and Berth's route would silently shadow the app's.
+	apps, _ := d.Store.Apps()
+	for _, a := range apps {
+		if slices.Contains(a.Domains, host) {
+			return fmt.Errorf("%s is a custom domain of %s; pick another with --host", host, a.Name)
+		}
 	}
 	_, cert := tunnel.CertForHost(d.zoneCertDir(), host)
 	if cert == "" {

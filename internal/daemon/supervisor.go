@@ -19,6 +19,7 @@ import (
 
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/gitx"
+	"github.com/dps/berth/internal/offsite"
 	"github.com/dps/berth/internal/runtime"
 	"github.com/dps/berth/internal/state"
 )
@@ -178,6 +179,7 @@ func (d *Daemon) supervise(ctx context.Context) {
 	apps, _ := d.Store.Apps()
 	for _, a := range apps {
 		d.superviseApp(ctx, a, cs)
+		d.superviseWorkers(ctx, a, cs)
 	}
 	d.syncTails(ctx, cs)
 	d.checkNetwork(ctx)
@@ -249,6 +251,60 @@ func (d *Daemon) superviseApp(ctx context.Context, a *state.App, cs []runtime.Co
 	st.healthy = time.Now()
 }
 
+// superviseWorkers restarts the current release's workers that have
+// stopped, with the same backoff and give-up rule as the web process.
+func (d *Daemon) superviseWorkers(ctx context.Context, a *state.App, cs []runtime.Container) {
+	if a.Stopped || d.Deployer.Busy(a.Name) {
+		return
+	}
+	rel := d.Store.CurrentRelease(a.Name)
+	if rel == nil {
+		return
+	}
+	for _, w := range rel.Workers {
+		key := a.Name + "/" + w.Name()
+		d.mu.Lock()
+		st, ok := d.crash[key]
+		if !ok {
+			st = &crashState{}
+			d.crash[key] = st
+		}
+		d.mu.Unlock()
+		if c, ok := runtime.Find(cs, w.Container); ok && c.Running() {
+			if st.container != w.Container {
+				*st = crashState{container: w.Container, healthy: time.Now()}
+			}
+			if st.failures > 0 && time.Since(st.healthy) > crashResetAfter {
+				st.failures = 0
+			}
+			continue
+		}
+		if st.gaveUp || time.Now().Before(st.next) {
+			continue
+		}
+		st.failures++
+		if st.failures > maxCrashFailures {
+			st.gaveUp = true
+			d.event(state.Event{Kind: "crash.loop", App: a.Name, Message: fmt.Sprintf("%s (v%d) exited %d times in a row; Berth stopped restarting it until the next deploy or `berth restart %s` (see `berth logs %s`)", w.Name(), rel.N, maxCrashFailures, a.Name, a.Name)})
+			continue
+		}
+		d.event(state.Event{Kind: "crash", App: a.Name, Message: fmt.Sprintf("%s (v%d) is not running; restarting (%d of %d before Berth gives up)", w.Name(), rel.N, st.failures, maxCrashFailures)})
+		st.next = time.Now().Add(d.CrashBackoff(st.failures))
+		if err := d.Deployer.RecoverWorker(ctx, a.Name, w.Name()); err != nil {
+			slog.Warn("worker restart", "app", a.Name, "worker", w.Name(), "err", err)
+			continue
+		}
+		if r := d.Store.CurrentRelease(a.Name); r != nil {
+			for _, nw := range r.Workers {
+				if nw.Name() == w.Name() {
+					st.container = nw.Container
+				}
+			}
+		}
+		st.healthy = time.Now()
+	}
+}
+
 // ---- log tails ----
 
 // syncTails keeps one `container logs --follow` per running app container,
@@ -258,7 +314,8 @@ func (d *Daemon) syncTails(ctx context.Context, cs []runtime.Container) {
 	defer d.mu.Unlock()
 	running := map[string]runtime.Container{}
 	for _, c := range cs {
-		if c.Running() && c.Labels["dev.berth.app"] != "" {
+		// Cron jobs write their own log (logs --cron).
+		if c.Running() && c.Labels["dev.berth.app"] != "" && c.Labels["dev.berth.role"] != "cron" {
 			running[c.ID] = c
 		}
 	}
@@ -274,7 +331,7 @@ func (d *Daemon) syncTails(ctx context.Context, cs []runtime.Container) {
 		}
 		tctx, cancel := context.WithCancel(ctx)
 		d.tails[id] = cancel
-		go d.tail(tctx, c.Labels["dev.berth.app"], c.Labels["dev.berth.release"], id)
+		go d.tail(tctx, c.Labels["dev.berth.app"], c.Labels["dev.berth.release"], c.Labels["dev.berth.process"], id)
 	}
 }
 
@@ -293,7 +350,9 @@ func (d *Daemon) tailOffsetPath(app, container string) string {
 	return d.Store.Path("apps", app, "logs", ".tail-"+container)
 }
 
-func (d *Daemon) tail(ctx context.Context, app, release, container string) {
+// tail copies a container's output into app.log, each line stamped with
+// the time and release, and the process for workers (v3 worker.1:).
+func (d *Daemon) tail(ctx context.Context, app, release, process, container string) {
 	defer func() {
 		d.mu.Lock()
 		delete(d.tails, container)
@@ -320,7 +379,11 @@ func (d *Daemon) tail(ctx context.Context, app, release, container string) {
 		if seen <= skip {
 			continue
 		}
-		fmt.Fprintf(w, "%s v%s: %s\n", time.Now().UTC().Format(time.RFC3339), release, sc.Text())
+		if process != "" {
+			fmt.Fprintf(w, "%s v%s %s: %s\n", time.Now().UTC().Format(time.RFC3339), release, process, sc.Text())
+		} else {
+			fmt.Fprintf(w, "%s v%s: %s\n", time.Now().UTC().Format(time.RFC3339), release, sc.Text())
+		}
 		if time.Since(lastSave) > time.Second {
 			os.WriteFile(offPath, []byte(fmt.Sprint(seen)), 0o600)
 			lastSave = time.Now()
@@ -410,13 +473,26 @@ func (r *RotatingWriter) Close() error {
 func (d *Daemon) pollLoop(ctx context.Context) {
 	t := time.NewTicker(d.PollEvery)
 	defer t.Stop()
-	for {
+	for tick := 1; ; tick++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 		apps, _ := d.Store.Apps()
+		// Pull requests are polled every fifth tick (5 minutes), behind
+		// the webhook, to catch missed deliveries and closed PRs.
+		if tick%5 == 0 {
+			for _, a := range apps {
+				if a.PreviewsOn {
+					go func(name string) {
+						if err := d.syncPreviews(ctx, name); err != nil {
+							slog.Debug("previews", "app", name, "err", err)
+						}
+					}(a.Name)
+				}
+			}
+		}
 		for _, a := range apps {
 			if a.Repo == "" || d.Deployer.Busy(a.Name) || d.isQueued(a.Name) {
 				continue
@@ -549,6 +625,13 @@ func (d *Daemon) scheduleLoop(ctx context.Context) {
 		if now.Hour() >= cfg.PGBackupHour && strings.TrimSpace(string(last)) != today {
 			state.WriteFile(marker, []byte(today+"\n"), 0o600)
 			d.nightlyBackups(ctx, cfg)
+			if _, err := offsite.LoadConfig(d.Store.Root); err == nil {
+				go func() {
+					if _, err := d.offsiteRun(ctx, false, "nightly", io.Discard); err != nil {
+						slog.Warn("off-Mac backup", "err", err)
+					}
+				}()
+			}
 			if cfg.CFIPFilter {
 				if err := d.refreshIPFilter(ctx); err != nil {
 					slog.Warn("webhook ip filter", "err", err)

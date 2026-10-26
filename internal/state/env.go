@@ -174,6 +174,7 @@ const (
 	KeyRelease        = "BERTH_RELEASE_COMMAND"
 	KeyReleaseTimeout = "BERTH_RELEASE_TIMEOUT"
 	KeyReleaseBackup  = "BERTH_RELEASE_BACKUP"
+	KeyCronTimeout    = "BERTH_CRON_TIMEOUT"
 	KeyPort           = "PORT"
 )
 

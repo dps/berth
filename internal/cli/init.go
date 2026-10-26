@@ -16,9 +16,11 @@ import (
 
 	"github.com/dps/berth/internal/caddy"
 	"github.com/dps/berth/internal/daemon"
+	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/doctor"
 	"github.com/dps/berth/internal/github"
 	"github.com/dps/berth/internal/launchd"
+	"github.com/dps/berth/internal/offsite"
 	"github.com/dps/berth/internal/rpc"
 	"github.com/dps/berth/internal/runtime"
 	"github.com/dps/berth/internal/state"
@@ -36,6 +38,7 @@ type initOpts struct {
 	yes         bool
 	tunnelName  string
 	skipGitHub  bool
+	restore     bool
 }
 
 func step(format string, args ...any) { fmt.Printf("-----> "+format+"\n", args...) }
@@ -54,7 +57,8 @@ func cmdInit() *cobra.Command {
 		Short: "One-time setup: tunnel, Caddy, launchd agents, GitHub login (safe to re-run)",
 		Example: "  berth init --domain example.com\n" +
 			"  berth init --no-tunnel                       # LAN only\n" +
-			"  berth init --domain example.com --github-token ghp_... --cf-token ... --yes",
+			"  berth init --domain example.com --github-token ghp_... --cf-token ... --yes\n" +
+			"  berth init --restore                          # a new Mac, from your off-Mac backups",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runInit(o) },
 	}
@@ -69,6 +73,7 @@ func cmdInit() *cobra.Command {
 	f.BoolVarP(&o.yes, "yes", "y", false, "non-interactive: accept defaults, skip optional prompts and sudo steps")
 	f.StringVar(&o.tunnelName, "tunnel-name", "berth", "Cloudflare tunnel name")
 	f.BoolVar(&o.skipGitHub, "skip-github", false, "no GitHub token (public repos only, polling)")
+	f.BoolVar(&o.restore, "restore", false, "set this Mac up from your off-Mac backups: asks for the recovery code (or set BERTH_RECOVERY_CODE)")
 	return c
 }
 
@@ -98,8 +103,13 @@ func runInit(o initOpts) error {
 	if o.noTunnel {
 		cfg.NoTunnel = true
 	}
-	if cfg.Domain == "" && !cfg.NoTunnel {
+	if cfg.Domain == "" && !cfg.NoTunnel && !o.restore {
 		return fmt.Errorf("--domain is required (or --no-tunnel for LAN-only)")
+	}
+	if o.restore {
+		if apps, _ := s.Apps(); len(apps) > 0 {
+			return fmt.Errorf("--restore is for a Mac with no apps yet, and this one has %d", len(apps))
+		}
 	}
 	cfg.CFIPFilter = cfg.CFIPFilter || o.cfIPFilter
 	cfg.Unattended = cfg.Unattended || o.unattended
@@ -154,6 +164,22 @@ func runInit(o initOpts) error {
 		return err
 	}
 
+	// 2b. From a backup: the old Mac's secrets and settings first, so the
+	// steps below reuse its domain, tunnel and logins.
+	restoreArchive := ""
+	if o.restore {
+		domain := cfg.Domain
+		if restoreArchive, err = seedFromBackup(ctx, s); err != nil {
+			return err
+		}
+		if cfg, err = s.Config(); err != nil {
+			return err
+		}
+		if o.domain != "" && cfg.Domain != domain {
+			return fmt.Errorf("the backup is for %s, not %s", cfg.Domain, domain)
+		}
+	}
+
 	// 3. Cloudflare tunnel.
 	if !cfg.NoTunnel {
 		if err := initTunnel(ctx, s, cfg, o); err != nil {
@@ -196,6 +222,9 @@ func runInit(o initOpts) error {
 			note("cloudflared tunnel --config %s --metrics %s run %s", s.Path("cloudflared.yml"), cfg.TunnelMetrics, cfg.TunnelID)
 		}
 		note("berthd")
+		if restoreArchive != "" {
+			note("then: berth restore %s (and delete it afterwards: it holds every secret, unencrypted)", restoreArchive)
+		}
 	} else {
 		if err := installAgents(s, cfg); err != nil {
 			return err
@@ -206,6 +235,16 @@ func runInit(o initOpts) error {
 			return hintErr(err, "see "+s.Path("logs", "berthd.log"))
 		}
 		note("berthd is up")
+		if restoreArchive != "" {
+			step("Restoring apps, databases and storage from the backup")
+			rctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+			_, err := client().Call(rctx, "restore", map[string]string{"archive": restoreArchive}, os.Stdout)
+			cancel()
+			os.Remove(restoreArchive) // it holds every secret, unencrypted
+			if err != nil {
+				return err
+			}
+		}
 		if cfg.CFIPFilter || o.cfToken != "" {
 			if _, err := client().Call(ctx, "tunnel.apply", nil, os.Stdout); err != nil {
 				note("warning: %v", err)
@@ -303,6 +342,14 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 	// the tunnel token so it follows later changes (custom domains) live.
 	// Without that, cloudflared uses the local config file and is restarted
 	// when it changes.
+	if o.restore && cfg.TunnelRemote {
+		if _, err := os.Stat(tunnel.TokenPath(s.SecretsDir(), id)); err == nil {
+			// Publishing the ingress now would drop the apps' custom
+			// domains until they're restored; berthd publishes it then.
+			note("tunnel ingress is managed remotely; it's updated once the apps are back")
+			return initCFToken(ctx, s, cfg, o)
+		}
+	}
 	cfg.TunnelRemote = false
 	rules := tunnel.Ingress(cfg.Domain, cfg.WebhookAddr, cfg.CaddyHTTP, existingDomains(s))
 	if err := tunnel.NewAPI(oc.APIToken).PutTunnelConfig(ctx, cfg.CFAccountID, id, rules); err != nil {
@@ -314,8 +361,12 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 		note("tunnel ingress is managed remotely: domain changes apply live")
 	}
 
-	// A scoped API token is optional; the browser login covers everything
-	// except the webhook IP filter (which needs Zone · WAF · Edit).
+	return initCFToken(ctx, s, cfg, o)
+}
+
+// initCFToken saves the optional scoped API token. The browser login
+// covers everything except the webhook IP filter (Zone · WAF · Edit).
+func initCFToken(ctx context.Context, s *state.Store, cfg *state.Config, o initOpts) error {
 	tokPath := filepath.Join(s.SecretsDir(), "cloudflare.token")
 	tok := o.cfToken
 	if tok == "" && cfg.CFIPFilter {
@@ -340,6 +391,44 @@ func initTunnel(ctx context.Context, s *state.Store, cfg *state.Config, o initOp
 		note("Cloudflare API token saved")
 	}
 	return nil
+}
+
+// seedFromBackup fetches the newest off-Mac backup with the recovery code,
+// decrypts it into ~/.berth/backups/offsite, and puts its secrets and
+// settings in place. It returns the archive for `berth restore`.
+func seedFromBackup(ctx context.Context, s *state.Store) (string, error) {
+	code := os.Getenv("BERTH_RECOVERY_CODE")
+	if code == "" {
+		var err error
+		if code, err = hidden("Recovery code (berthrestore_…, hidden): "); err != nil {
+			return "", err
+		}
+	}
+	ocfg, key, err := offsite.ParseRecoveryCode(code)
+	if err != nil {
+		return "", err
+	}
+	step("Fetching the newest backup from %s, folder %s", ocfg.Bucket, ocfg.Prefix)
+	note("If the old Mac is still running Berth, run `berth uninstall` there first: both would")
+	note("serve the same tunnel and split your traffic between them.")
+	dir := s.Path("backups", "offsite")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, "restore.tar.gz")
+	os.Remove(dest)
+	obj, err := ocfg.Fetch(ctx, key, "", dest)
+	if err != nil {
+		return "", fmt.Errorf("fetching the backup: %w", err)
+	}
+	note("%s, from %s (%s)", strings.TrimPrefix(obj.Key, ocfg.Prefix), obj.Modified.Local().Format("Mon 2 Jan 15:04"), deploy.HumanBytes(obj.Size))
+	if err := daemon.SeedFromArchive(dest, s); err != nil {
+		os.Remove(dest)
+		return "", err
+	}
+	cfg, _ := s.Config()
+	note("Using the backup's domain (%s), Cloudflare tunnel, GitHub login and sign-in settings", cfg.Domain)
+	return dest, nil
 }
 
 // existingDomains lists custom domains of existing apps (re-running init).

@@ -40,3 +40,24 @@ func TestMigrationHint(t *testing.T) {
 		}
 	}
 }
+
+func TestProcfileWorkersAndCron(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Procfile"), []byte("web: node server.js\nrelease: npm run migrate\nworker: node worker.js\nclock: node clock.js\nBad_Name: x\n"), 0o644)
+	w, bad := ProcfileWorkers(dir)
+	if len(w) != 2 || w["worker"] != "node worker.js" || w["clock"] != "node clock.js" || len(bad) != 1 || bad[0] != "Bad_Name" {
+		t.Fatalf("workers %v, bad %v", w, bad)
+	}
+	if jobs, err := AppJSONCron(dir); err != nil || jobs != nil {
+		t.Fatalf("no app.json: %v %v", jobs, err)
+	}
+	os.WriteFile(filepath.Join(dir, "app.json"), []byte(`{"name":"x","cron":[{"command":"npm run digest","schedule":"0 7 * * *"},{"command":"node sweep.js","schedule":"@hourly"}]}`), 0o644)
+	jobs, err := AppJSONCron(dir)
+	if err != nil || len(jobs) != 2 || jobs[1].Schedule != "@hourly" {
+		t.Fatalf("jobs %v %v", jobs, err)
+	}
+	os.WriteFile(filepath.Join(dir, "app.json"), []byte(`{"cron":[{"command":"x","schedule":"every day"}]}`), 0o644)
+	if _, err := AppJSONCron(dir); err == nil {
+		t.Fatal("bad schedule accepted")
+	}
+}

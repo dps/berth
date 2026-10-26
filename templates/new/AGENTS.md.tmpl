@@ -37,6 +37,21 @@ A deploy switches traffic once `/` answers with a status below 500 (set
 and builds it; a `Dockerfile` at the repo root replaces that, and
 `berth dockerfile {{.App}}` prints the one Berth generates.
 
+### Background work
+
+- **Workers**: a line in the `Procfile` other than `web` and `release`, such
+  as `worker: node worker.js`, runs as its own container next to the web
+  process, from the same build and config, restarted if it exits. A web
+  process is still required. `berth ps:scale {{.App}} worker=2` runs more.
+- **Scheduled jobs**: a `"cron"` list in `app.json`, for example
+  `{"cron": [{"command": "node digest.js", "schedule": "0 7 * * *"}]}`, in the
+  Mac's local time. Each run is a fresh container; a run still going when the
+  next is due is skipped. Dev versions and previews don't run schedules: try a
+  job with `berth cron:run {{.App}}-dev 1`, see them with `berth cron {{.App}}`
+  and their output with `berth logs {{.App}} --cron`.
+- Pull requests may get previews, `{{.App}}-pr-<number>`, if the user has
+  turned them on (`berth previews {{.App}}`): a check on the PR links to it.
+
 ### Looking at it
 
 - `berth logs {{.App}}-dev -n 200` (and `{{.App}}` for production); `--build`

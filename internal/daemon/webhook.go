@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -100,6 +101,26 @@ func (d *Daemon) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	delivery := r.Header.Get("X-GitHub-Delivery")
 	if event == "ping" {
 		io.WriteString(w, "pong\n")
+		return
+	}
+	if event == "pull_request" {
+		if !app.PreviewsOn {
+			io.WriteString(w, "previews are off; ignored\n")
+			return
+		}
+		var pe github.PullRequestEvent
+		if err := json.Unmarshal(body, &pe); err != nil {
+			http.Error(w, "bad payload", http.StatusBadRequest)
+			return
+		}
+		d.event(state.Event{Kind: "webhook", App: name, Message: fmt.Sprintf("pull request #%d %s, delivery %s", pe.Number, pe.Action, delivery)})
+		go func() {
+			if err := d.syncPreviews(d.ctx, name); err != nil {
+				slog.Warn("previews", "app", name, "err", err)
+			}
+		}()
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, "syncing previews\n")
 		return
 	}
 	if event != "push" {

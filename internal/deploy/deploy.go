@@ -175,6 +175,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 			return nil, ErrNothingToDeploy
 		}
 		rel.SHA, rel.Image, rel.Message, rel.ProcfileRelease = cur.SHA, cur.Image, cur.Message, cur.ProcfileRelease
+		rel.Processes, rel.Cron = cur.Processes, cur.Cron
 		say(out, "Releasing %s v%d (config change, image from v%d)", app.Name, n, cur.N)
 	} else {
 		start := time.Now()
@@ -186,6 +187,10 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 		defer os.RemoveAll(buildDir)
 		rel.SHA, rel.Message, rel.Image = sha, subject, state.ImageName(app.Name, n)
 		rel.ProcfileRelease = detect.ProcfileRelease(buildDir)
+		if err := readProcesses(buildDir, rel, out); err != nil {
+			d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: err.Error()})
+			return nil, err
+		}
 		d.Event(state.Event{Kind: "deploy.start", App: app.Name, Message: fmt.Sprintf("v%d %s@%s (%s)", n, app.Branch, short(sha), req.Trigger)})
 		if err := d.Store.SaveRelease(app.Name, rel); err != nil {
 			return nil, err
@@ -470,11 +475,18 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 			detail(out, "warning: proxy update failed: %v", err)
 		}
 	}
+	// Workers move straight over (stopped before starting the new ones, so
+	// no job is picked up twice); retire saves prev after its drain, so
+	// this saves first.
+	if prev != nil && prev.N != rel.N {
+		d.stopWorkers(ctx, app.Name, prev, out)
+	}
 	if prev != nil && prev.N != rel.N && prev.Container != "" {
 		drain := env.IntSetting(state.KeyDrain, 5)
 		say(out, "v%d is live; v%d drains for %ds, then stops", rel.N, prev.N, drain)
 		go d.retire(app.Name, prev.N, prev.Container, prev.HostPort, time.Duration(drain)*time.Second)
 	}
+	d.startWorkers(ctx, app, cfg, rel, env, out)
 	return nil
 }
 
@@ -951,6 +963,8 @@ func (d *Deployer) Restart(ctx context.Context, appName string, out io.Writer) e
 	if old != "" && old != fresh.Container {
 		go d.retire(appName, rel.N, old, oldPort, time.Duration(env.IntSetting(state.KeyDrain, 5))*time.Second)
 	}
+	d.stopWorkers(ctx, appName, &fresh, out)
+	d.startWorkers(ctx, app, cfg, &fresh, env, out)
 	d.Event(state.Event{Kind: "restart", App: appName, Message: fmt.Sprintf("v%d restarted", rel.N)})
 	return nil
 }
@@ -1008,12 +1022,15 @@ func (d *Deployer) Stop(ctx context.Context, appName string) error {
 	if d.Router != nil {
 		d.Router.Apply(ctx)
 	}
-	if rel := d.Store.CurrentRelease(appName); rel != nil && rel.Container != "" {
-		d.RT.Stop(ctx, rel.Container, 10*time.Second)
-		d.RT.Remove(ctx, rel.Container)
-		rel.Container = ""
-		rel.Status = state.StatusStopped
-		d.Store.SaveRelease(appName, rel)
+	if rel := d.Store.CurrentRelease(appName); rel != nil {
+		d.stopWorkers(ctx, appName, rel, nil)
+		if rel.Container != "" {
+			d.RT.Stop(ctx, rel.Container, 10*time.Second)
+			d.RT.Remove(ctx, rel.Container)
+			rel.Container = ""
+			rel.Status = state.StatusStopped
+			d.Store.SaveRelease(appName, rel)
+		}
 	}
 	d.Event(state.Event{Kind: "stop", App: appName, Message: "stopped"})
 	return nil
@@ -1042,6 +1059,8 @@ func (d *Deployer) Start(ctx context.Context, appName string, out io.Writer) err
 	if err := d.startCheckSwapSame(ctx, app, cfg, rel, env, out); err != nil {
 		return err
 	}
+	d.stopWorkers(ctx, appName, rel, nil) // leftovers, if any
+	d.startWorkers(ctx, app, cfg, rel, env, out)
 	d.Event(state.Event{Kind: "start", App: appName, Message: fmt.Sprintf("v%d started", rel.N)})
 	return nil
 }
@@ -1142,7 +1161,7 @@ func (d *Deployer) gc(ctx context.Context, app *state.App, env state.Env, cfg *s
 	// once they fall outside the window.
 	var refs []string
 	for _, r := range prune {
-		if r.Container != "" {
+		if r.Container != "" || len(r.Workers) > 0 {
 			continue // still running (draining); next GC gets it
 		}
 		if !keepImages[r.Image] {

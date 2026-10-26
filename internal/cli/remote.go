@@ -92,7 +92,7 @@ func berthTarget() (*sshTarget, error) {
 // command builds `ssh <mac> berth <args>`. With tty, ssh allocates a
 // terminal, for prompts, shells and colour.
 func (t *sshTarget) command(args []string, tty bool) *exec.Cmd {
-	remote := "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH berth"
+	remote := "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH BERTH_CLIENT_VERSION=" + shellQuote(Version) + " berth"
 	for _, a := range args {
 		remote += " " + shellQuote(a)
 	}
@@ -145,7 +145,7 @@ func sshError(t *sshTarget, err error) error {
 // localOnly commands run on this machine even when Berth isn't here: they
 // work on local files, or reach the Mac themselves.
 var localOnly = map[string]bool{
-	"new": true, "dev:push": true, "git:remote": true, "admin": true,
+	"new": true, "dev:push": true, "git:remote": true, "admin": true, "upgrade": true,
 	"init": true, "uninstall": true, "trust-ca": true,
 	"help": true, "completion": true, cobra.ShellCompRequestCmd: true, cobra.ShellCompNoDescRequestCmd: true,
 }

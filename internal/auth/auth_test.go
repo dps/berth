@@ -458,3 +458,23 @@ func TestVerifyIdentity(t *testing.T) {
 		t.Fatal("accepted forged claims")
 	}
 }
+
+func TestSignInStartsAreLimitedPerIP(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBrowser(t, s)
+	from := func(ip string) int {
+		return b.do("GET", "https://chirp.example.com/_berth/login", map[string]string{"Cf-Connecting-Ip": ip}).Code
+	}
+	for i := 0; i < maxStartsPerIP; i++ {
+		if c := from("203.0.113.9"); c != http.StatusFound {
+			t.Fatalf("start %d: %d", i, c)
+		}
+	}
+	if c := from("203.0.113.9"); c != http.StatusTooManyRequests {
+		t.Fatalf("over the limit: %d", c)
+	}
+	// Someone else is unaffected.
+	if c := from("198.51.100.1"); c != http.StatusFound {
+		t.Fatalf("other client: %d", c)
+	}
+}

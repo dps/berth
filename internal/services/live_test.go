@@ -30,7 +30,7 @@ func TestLiveReplace(t *testing.T) {
 	if _, _, err := m.Link(ctx, "pg", name, app, "", state.Env{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.LinkDev(ctx, name, app+"-dev", "DATABASE_URL"); err != nil {
+	if _, err := m.LinkDev(ctx, name, app+"-dev", "DATABASE_URL", DevDB(name)); err != nil {
 		t.Fatal(err)
 	}
 	sv, _ := m.Store.Service("pg", name)

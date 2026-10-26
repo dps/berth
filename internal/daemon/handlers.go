@@ -36,6 +36,16 @@ func (d *Daemon) handlers() map[string]handler {
 			return map[string]string{"version": Version}, nil
 		},
 		"apps.create":     d.hCreate,
+		"previews":        d.hPreviews,
+		"offsite.setup":   d.hOffsiteSetup,
+		"offsite.run":     d.hOffsiteRun,
+		"offsite.status":  d.hOffsiteStatus,
+		"offsite.key":     d.hOffsiteKey,
+		"offsite.get":     d.hOffsiteGet,
+		"offsite.off":     d.hOffsiteOff,
+		"cron.list":       d.hCronList,
+		"cron.run":        d.hCronRun,
+		"ps.scale":        d.hScale,
 		"apps.destroy":    d.hDestroy,
 		"deploy":          d.hDeploy,
 		"rollback":        d.hRollback,
@@ -176,6 +186,9 @@ func (d *Daemon) hCreate(ctx context.Context, params json.RawMessage, out io.Wri
 	}
 	if err := state.ValidateAppName(p.Name); err != nil {
 		return nil, err
+	}
+	if state.IsPreviewName(p.Name) {
+		return nil, fmt.Errorf("names ending in -pr-<number> are kept for pull request previews; pick another")
 	}
 	if base, ok := strings.CutSuffix(p.Name, "-dev"); ok && d.Store.AppExists(base) {
 		return nil, fmt.Errorf("%s is the address of %s's dev version (berth dev:push)", p.Name, base)
@@ -385,6 +398,10 @@ func (d *Daemon) hDestroy(ctx context.Context, params json.RawMessage, out io.Wr
 	if dev, err := d.Store.App(state.DevName(app.Name)); err == nil && dev.DevOf == app.Name {
 		fmt.Fprintf(out, "-----> Destroying the dev version %s\n", dev.Name)
 		d.destroyApp(ctx, dev, false, out)
+	}
+	for _, pv := range d.previewsOf(app.Name) {
+		fmt.Fprintf(out, "-----> Destroying the preview %s\n", pv.Name)
+		d.destroyApp(ctx, pv, false, out)
 	}
 	d.destroyApp(ctx, app, p.KeepData, out)
 	return map[string]string{"destroyed": app.Name}, nil

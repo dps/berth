@@ -202,3 +202,12 @@ done
 `, shellQuote(berthHome), shellQuote(berthBin), shellQuote("refs/heads/"+branch), shellQuote(app))
 	return os.WriteFile(filepath.Join(dir, "hooks", "post-receive"), []byte(hook), 0o755)
 }
+
+// FetchRef fetches the remote ref src (such as refs/pull/12/head) into the
+// local ref dst and returns its sha.
+func FetchRef(ctx context.Context, dir, src, dst string, auth Auth) (string, error) {
+	if _, err := git(ctx, auth, "--git-dir", dir, "fetch", "--quiet", "--no-tags", "origin", "+"+src+":"+dst); err != nil {
+		return "", err
+	}
+	return git(ctx, Auth{}, "--git-dir", dir, "rev-parse", dst)
+}
