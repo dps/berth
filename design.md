@@ -11,7 +11,7 @@ Target: macOS 26, Apple Silicon. Language: Go (two static binaries, `berth` and 
 **Status (Oct 2026):** implemented as described here and in daily use on one Mac mini (M4, 16 GB, macOS 26.1, Apple's `container` 1.6.1) serving several apps on a real domain: launchd runs berthd, Caddy and cloudflared; the Cloudflare tunnel, GitHub webhooks, Google sign-in, the AI gateway and the admin page have all carried real traffic. Not yet exercised: recovery from a power cut, `berth reboot`, restoring onto a second Mac (`berth init --restore`), and PR previews against a real pull request (see each section). Sections below describe what the code does; findings from building it are written in place.
 
 ```bash
-brew tap dps/berth https://github.com/dps/berth && brew install berth   # once
+brew tap dps/berth https://github.com/dps/berth && brew trust dps/berth && brew install berth   # once
 berth init --domain example.com                                       # ~3 minutes
 berth create myapp --repo me/myapp                       # per app
 git push                                                  # every deploy
@@ -47,6 +47,7 @@ The whole product is three moments. Everything in later sections exists to make 
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth   # the formula lives in this repo
+brew trust dps/berth                               # Homebrew 7+ refuses untrusted taps
 brew install berth                                 # or --HEAD for main
 berth init --domain example.com
 ```

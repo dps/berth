@@ -8,6 +8,7 @@ micro-VM on a Mac in your closet. Postgres is one command away.
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth
+brew trust dps/berth                      # Homebrew 7+ asks before using a tap
 brew install berth
 
 berth init --domain example.com           # once: tunnel, proxy, background services
@@ -80,6 +81,7 @@ Homebrew installs the rest: Apple's
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth
+brew trust dps/berth                      # Homebrew 7+ asks before using a tap
 brew install berth
 berth init --domain example.com
 ```
