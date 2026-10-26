@@ -109,9 +109,9 @@ func latestRelease(ctx context.Context) (string, error) {
 	return best, nil
 }
 
-// installMethod says how this berth was installed and the command that
-// upgrades it.
-func installMethod() (how string, upgrade []string) {
+// installMethod says how this berth was installed and the commands that
+// upgrade it.
+func installMethod() (how string, upgrade [][]string) {
 	exe, err := os.Executable()
 	if err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
@@ -122,9 +122,11 @@ func installMethod() (how string, upgrade []string) {
 		// A --HEAD install lives in Cellar/berth/HEAD-<sha>, and plain
 		// `brew upgrade` skips those.
 		if strings.HasPrefix(exe[i+len("/Cellar/berth/"):], "HEAD-") {
-			return "Homebrew (--HEAD)", []string{"brew", "upgrade", "--fetch-HEAD", "berth"}
+			return "Homebrew (--HEAD)", [][]string{{"brew", "upgrade", "--fetch-HEAD", "berth"}}
 		}
-		return "Homebrew", []string{"brew", "upgrade", "berth"}
+		// Homebrew refreshes its own formulas by itself, but a third-party
+		// tap's only on `brew update`: without it, upgrade sees no new version.
+		return "Homebrew", [][]string{{"brew", "update"}, {"brew", "upgrade", "berth"}}
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Path == "github.com/dps/berth" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		// `go install …@version` builds from the module cache; a build in a
@@ -134,7 +136,7 @@ func installMethod() (how string, upgrade []string) {
 			local = local || kv.Key == "vcs.revision"
 		}
 		if !local {
-			return "go install", []string{"go", "install", "github.com/dps/berth/cmd/berth@latest"}
+			return "go install", [][]string{{"go", "install", "github.com/dps/berth/cmd/berth@latest"}}
 		}
 	}
 	return "a source build", nil
@@ -171,11 +173,18 @@ func cmdUpgrade() *cobra.Command {
 			if c, ok := compareVersions(Version, latest); ok && c >= 0 && lerr == nil {
 				fmt.Println("-----> Already up to date here")
 			} else {
-				fmt.Printf("-----> %s\n", strings.Join(up, " "))
-				x := exec.Command(up[0], up[1:]...)
-				x.Stdin, x.Stdout, x.Stderr = os.Stdin, os.Stdout, os.Stderr
-				if err := x.Run(); err != nil {
-					return fmt.Errorf("%s: %w", strings.Join(up, " "), err)
+				for _, step := range up {
+					fmt.Printf("-----> %s\n", strings.Join(step, " "))
+					x := exec.Command(step[0], step[1:]...)
+					x.Stdin, x.Stdout, x.Stderr = os.Stdin, os.Stdout, os.Stderr
+					if err := x.Run(); err != nil {
+						return fmt.Errorf("%s: %w", strings.Join(step, " "), err)
+					}
+				}
+				// Check it took, rather than report success on faith.
+				if now := installedVersion(); lerr == nil && now != "" && !sameVersion(now, latest) {
+					return hintErr(fmt.Errorf("the upgrade finished, but berth is still %s, not %s", now, latest),
+						fmt.Sprintf("try `%s` by hand", joinSteps(up)))
 				}
 			}
 			if isBerthMac() {
@@ -189,7 +198,7 @@ func cmdUpgrade() *cobra.Command {
 				return nil
 			}
 			if err := t.run("upgrade"); err != nil {
-				return hintErr(err, "if the Mac's Berth predates `berth upgrade`, run `brew upgrade --fetch-HEAD berth` there once")
+				return hintErr(err, "if the Mac's Berth predates `berth upgrade`, run `brew update && brew upgrade berth` there once")
 			}
 			return nil
 		},
@@ -197,6 +206,34 @@ func cmdUpgrade() *cobra.Command {
 	c.Flags().BoolVar(&check, "check", false, "only show the installed and latest versions")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "also upgrade the Berth Mac without asking")
 	return c
+}
+
+// installedVersion asks the berth now on this path for its version (the
+// one running is still the old one).
+func installedVersion() string {
+	exe, err := exec.LookPath("berth") // the link Homebrew repoints
+	if err != nil {
+		if exe, err = os.Executable(); err != nil {
+			return ""
+		}
+	}
+	out, err := exec.Command(exe, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	f := strings.Fields(string(out))
+	if len(f) == 0 {
+		return ""
+	}
+	return f[len(f)-1] // "berth version 0.1.1"
+}
+
+func joinSteps(steps [][]string) string {
+	var parts []string
+	for _, s := range steps {
+		parts = append(parts, strings.Join(s, " "))
+	}
+	return strings.Join(parts, " && ")
 }
 
 // waitForDaemonUpgrade waits for berthd to restart on the new binary,
