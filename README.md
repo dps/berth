@@ -15,6 +15,9 @@ berth create myapp --repo you/myapp       # once per app: webhook, hostname, fir
 git push                                  # every deploy after that
 ```
 
+Starting from nothing? `berth new myapp` makes a starter app with
+instructions for your coding agent, creates its GitHub repo and deploys it.
+
 That's the whole loop. No ports opened on your router, no certificates to
 manage, no YAML, no Docker Desktop, and no `sudo` after setup.
 
@@ -31,6 +34,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 
 - [What you need](#what-you-need)
 - [Setting up](#setting-up)
+- [Starting a new app](#starting-a-new-app)
 - [Deploying an app](#deploying-an-app)
 - [Releases, rollbacks and restarts](#releases-rollbacks-and-restarts)
 - [Configuration](#configuration)
@@ -45,9 +49,11 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [The admin page](#the-admin-page)
 - [One-off commands and shells](#one-off-commands-and-shells)
 - [Running a Mac in a closet](#running-a-mac-in-a-closet)
+- [Working from another machine](#working-from-another-machine)
 - [Backups and moving to a new Mac](#backups-and-moving-to-a-new-mac)
 - [Command reference](#command-reference)
 - [Troubleshooting](#troubleshooting)
+- [Example apps](#example-apps)
 - [How it works](#how-it-works)
 - [Development](#development)
 
@@ -115,6 +121,45 @@ changes only what the flags say.
 
 `--yes` never runs `sudo`; do the power settings yourself with
 `sudo pmset -a sleep 0 disksleep 0 womp 1 autorestart 1`.
+
+## Starting a new app
+
+```bash
+berth new myapp                    # or --stack python | go | static
+```
+
+This makes a folder `myapp` that's ready for a coding agent:
+
+- **A small web app** that follows [Berth's contract](#what-your-app-must-do):
+  Node with no dependencies (the default), Python with FastAPI, Go with the
+  standard library, or a static site.
+- **`AGENTS.md`**, the instructions file Codex, Cursor and most other agents
+  read: how to try changes on the [dev version](#dev-versions-for-agents)
+  with `berth dev:push`, read logs, set config, add a database and write
+  migrations, use [sign-in](#sign-in-with-google) and [AI](#ai-for-your-apps)
+  when your Berth has them, and what to ask you before doing (pushing to
+  `main`, rollbacks, production config). It has your app's real URLs. Edit
+  it freely: it's yours.
+- **`CLAUDE.md`**, one line that points Claude Code at `AGENTS.md`.
+- A README, a `.gitignore`, and a first commit on `main`.
+
+Then, asking first:
+
+1. **GitHub.** With the [GitHub CLI](https://cli.github.com) logged in
+   (`brew install gh && gh auth login`), Berth creates a private repo,
+   `<you>/myapp`, and pushes to it (`--public` for a public one, `--repo` for
+   another name or an organization). Without it, Berth prints the three steps
+   to do it by hand.
+2. **Berth.** It creates the app from that repo and deploys it, as
+   [`berth create`](#deploying-an-app) does.
+
+`-y` answers yes to both; `--no-github` and `--no-deploy` skip them. Then
+open the folder in your agent and ask for what you want built.
+
+`berth new` works on your laptop too, where your editor and agent are: see
+[Working from another machine](#working-from-another-machine). For an
+existing repo, `berth dev:agents myapp` prints the Berth part of
+`AGENTS.md` to paste in.
 
 ## Deploying an app
 
@@ -211,7 +256,8 @@ git push berth main
 ```
 
 `git push berth` needs **Remote Login** on the Mac (System Settings → General →
-Sharing). From elsewhere, use `berth git:remote myapp --host <ssh-host>` with any name that reaches the Mac over SSH.
+Sharing). From another machine, see
+[Working from another machine](#working-from-another-machine).
 
 ### Private repos
 
@@ -648,13 +694,15 @@ commit and a summary of uncommitted changes) on stdout, with progress on
 stderr. A failed push leaves the previous dev release serving.
 
 `berth dev:agents myapp` prints a block to paste into the repo's `AGENTS.md`
-or `CLAUDE.md` that tells an agent how to deploy, read logs and authenticate.
+that tells an agent how to deploy, read logs and authenticate. Apps made
+with [`berth new`](#starting-a-new-app) already have it.
 
 ### Who can reach it
 
 Dev versions run unreviewed code, so they aren't public. With
 [sign-in](#sign-in-with-google) set up, they're open to the `@owners` group
-(`berth auth:group owners you@gmail.com`); without it, they're LAN only. Agents can't click through Google, so give them a token:
+(`berth auth:group owners you@gmail.com`); without it, they're LAN only.
+Agents can't click through Google, so give them a token:
 
 ```bash
 berth dev:token myapp --as test@example.com     # prints export BERTH_DEV_TOKEN=…
@@ -696,10 +744,10 @@ removes the dev address altogether.
 
 ### From another machine
 
-From a laptop with the Berth CLI, add the SSH remote once
-(`berth git:remote myapp`, run on the Mac or with `--host`), then `berth
-dev:push` in the repo pushes the snapshot over SSH and runs the deploy on the
-Mac. The exit codes and `--json` output are the same.
+On a laptop, `berth dev:push` in the repo pushes the snapshot over SSH and
+runs the deploy on the Mac, with the same exit codes and `--json` output. It
+needs the repo's `berth` remote: see
+[Working from another machine](#working-from-another-machine).
 
 ## AI for your apps
 
@@ -819,9 +867,9 @@ A web page with everything on your Berth, live, for the people in the
 `@owners` [sign-in](#sign-in-with-google) group:
 
 - **Overview:** is everything up (containers, proxy, tunnel, disk, memory,
-  AI), warnings, traffic and p50 and p95 latency across all apps for the last 24 hours, every app
-  with its release, requests, errors, latency, visitors and memory, your
-  databases, and recent deploys and crashes.
+  AI), warnings, traffic and p50 and p95 latency across all apps for the
+  last 24 hours, every app with its release, requests, errors, latency,
+  visitors and memory, your databases, and recent deploys and crashes.
 - **Each app:** requests, visitors, error rate, latency (p50, p95, p99),
   data served and bot share for the last hour, day or week, compared with
   the period before; charts of requests and latency; top pages, referrers,
@@ -867,7 +915,8 @@ Berth is built to run for months with no one at the screen.
   checks in a row fail, it restarts the container system, which takes the apps
   down for about 6 seconds, and notifies you. Set `"auto_heal_network": false`
   in `~/.berth/config.json` to only be notified.
-- **Upgrades are hands-off.** `brew upgrade berth` replaces the binaries; the
+- **Upgrades are hands-off.** `brew upgrade --fetch-HEAD berth` replaces the
+  binaries (plain `brew upgrade` skips `--HEAD` installs); the
   running `berthd` notices, waits for any deploy in progress, and restarts
   itself. Apps keep running throughout.
 
@@ -911,6 +960,34 @@ berth gc                 # remove old release images, expired dumps, leftover bu
 Berth refuses to deploy when less than 2 GB of disk is free, rather than
 filling the boot volume.
 
+## Working from another machine
+
+The Mac can live in a closet while you, your editor and your coding agent
+work on a laptop. Install the CLI there too, with no `init`: the Homebrew
+formula above on a Mac that meets [the requirements](#what-you-need), or
+`go install github.com/dps/berth/cmd/berth@latest` anywhere else Go runs,
+including Intel Macs and Linux. Then tell it where the Mac is:
+
+```bash
+export BERTH_HOST=you@your-mac.local     # any name ssh reaches the Mac by
+berth status
+```
+
+On a machine without Berth, every `berth` command runs on the Mac over SSH,
+with your terminal, so prompts, `berth logs -f` and `berth run` shells work as
+usual. It needs Remote Login on the Mac (System Settings → General → Sharing)
+and SSH keys, so there's no password prompt.
+
+Inside an app's repo, the `berth` git remote does the same job as
+`BERTH_HOST`, so an agent working there needs nothing set. `berth new` adds
+it; for an existing clone, run `berth git:remote myapp` once in the repo.
+
+A few commands do their work on the laptop instead: `berth new` and
+`dev:push` (they use the files here), `git:remote` (it adds the remote here),
+`admin` (it opens the page in your browser here), and `config:import`, which
+sends the laptop's `.env` file. Any other path you pass, as in
+`berth pg:restore db dump.sql`, is a path on the Mac.
+
 ## Backups and moving to a new Mac
 
 ```bash
@@ -952,6 +1029,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth trust-ca` | trust Caddy's local CA in your login keychain |
 | `berth uninstall [--purge]` | remove Berth |
 | **Apps** | |
+| `berth new <app> [--stack node\|python\|go\|static] [--repo r] [--public] [--no-github] [--no-deploy] [-y]` | start an app: a starter, `AGENTS.md`, a GitHub repo, the first deploy |
 | `berth create <app> [--repo r] [--branch b] [--path p] [--private] [--no-webhook] [--no-deploy]` | register and deploy an app |
 | `berth deploy <app> [--ref r] [--no-cache]` | build and release now |
 | `berth rollback <app> [n] [--with-data]` | back to the previous (or nth) release; `--with-data` also restores its databases |
@@ -959,7 +1037,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth releases <app>` | release history |
 | `berth destroy <app> [--keep-data]` | delete an app, its webhook and images |
 | `berth dockerfile <app>` | print the Dockerfile Berth would use |
-| `berth git:remote <app> [--host h]` | add a `berth` remote for `git push berth` |
+| `berth git:remote <app> [--host h]` | add a `berth` remote for `git push berth`, `dev:push` and running commands from another machine |
 | `berth app:set-key <app>` | use an SSH deploy key for this repo |
 | `berth app:set-repo <app> <repo> [--branch b]` | deploy from another repo or branch |
 | **Config** | |
@@ -967,7 +1045,7 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth config:unset <app> K …` | remove variables |
 | `berth config:get <app> K` | print one variable |
 | `berth config:show <app> [--reveal] [--shell]` | list variables |
-| `berth config:import <app> <file> [--replace]` | load a `.env` file |
+| `berth config:import <app> <file\|-> [--replace]` | load a `.env` file (`-` reads stdin) |
 | **Logs** | |
 | `berth logs <app> [-f] [-n N] [--since d] [--build [n]] [--release [n]] [--access]` | app, build, release-command or access logs |
 | `berth logs --all [-f]` | every app's logs |
@@ -1043,6 +1121,7 @@ files.
 
 | Variable | Use |
 | --- | --- |
+| `BERTH_HOST` | on a machine without Berth, the Mac to run commands on, as `ssh` reaches it (`you@your-mac.local`); see [Working from another machine](#working-from-another-machine) |
 | `BERTH_HOME` | use a different state directory (default `~/.berth`) |
 | `BERTH_DEBUG=1` | `berthd` logs every external command with its duration |
 | `BERTH_GITHUB_CLIENT_ID` | GitHub OAuth app for device-flow login in `init` |
@@ -1077,8 +1156,8 @@ work. Each README lists the `berth` commands to deploy it.
 - **`berthd`** is the brain: it receives webhooks, builds with `container
   build`, runs each release in its own micro-VM, health-checks it, and
   switches traffic by updating a DNS SRV record that Caddy re-reads every
-  second (so deploys never reload Caddy). Then it watches everything. It's the only thing that
-  writes to `~/.berth`.
+  second (so deploys never reload Caddy). Then it watches everything. It's
+  the only thing that writes to `~/.berth`.
 - **Caddy** routes each hostname to the right app, terminates LAN HTTPS,
   compresses responses, writes access logs and enforces basic auth.
 - **cloudflared** keeps an outbound connection to Cloudflare, so the Mac needs

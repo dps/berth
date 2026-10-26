@@ -1,0 +1,100 @@
+{{define "berth" -}}
+## Deploying with Berth
+
+This app runs on [Berth](https://github.com/dps/berth), a small PaaS on a Mac.
+Each app runs in its own Linux micro-VM behind a proxy. The `berth` commands
+below work on that Mac, and from any machine that reaches it over SSH: there,
+the CLI runs them on the Mac, which it finds from this repo's `berth` git
+remote. If the remote is missing, ask the user to run
+`BERTH_HOST=<user>@<mac> berth git:remote {{.App}}` in the repo.
+
+- **Production**: {{.Prod}}. Every push to `{{.Branch}}` on GitHub deploys it.
+  Only push to `{{.Branch}}` when the user asks you to ship.
+- **Dev version**: {{.Dev}}, for trying changes before they're committed.
+  `berth dev:push` deploys the working tree as it is on disk, uncommitted
+  changes included. Add `--json` for a structured result. Exit code 0 means
+  live, 1 the build failed, 2 the app failed to start, 3 the release command
+  (migrations) failed; the output says why. A failed push leaves the previous
+  dev release serving.
+- The dev version isn't public. Requests need a token:
+  `curl -H "Authorization: Bearer $BERTH_DEV_TOKEN" {{.Dev}}/`.
+  If `BERTH_DEV_TOKEN` isn't set, ask the user to run
+  `berth dev:token {{.App}} --as test@example.com`; requests are then signed
+  in as that test user.
+
+### What the app must do
+
+1. Listen on `$PORT` (8080 unless set) on `0.0.0.0`.
+2. Read configuration and secrets from environment variables. Never commit
+   secrets: set them with `berth config:set {{.App}} KEY=value` (the app
+   restarts) and `berth config:set {{.App}}-dev KEY=value` for the dev version.
+3. Write files only to `/tmp` or a mounted folder
+   (`berth storage:mount {{.App}} /data`); everything else is reset on each deploy.
+4. Log to stdout and stderr.
+
+A deploy switches traffic once `/` answers with a status below 500 (set
+`BERTH_HEALTHCHECK=/healthz` to check another path). Berth detects the stack
+and builds it; a `Dockerfile` at the repo root replaces that, and
+`berth dockerfile {{.App}}` prints the one Berth generates.
+
+### Looking at it
+
+- `berth logs {{.App}}-dev -n 200` (and `{{.App}}` for production); `--build`
+  for the last build, `--release` for the last release command, `-f` to follow.
+- `berth status {{.App}}`, `berth releases {{.App}}`, `berth config:show {{.App}}`.
+- One-off commands in the app's environment: `berth run {{.App}}-dev <command>`.
+
+### Data
+
+- Postgres: `berth pg:create {{.App}}-db && berth pg:link {{.App}}-db {{.App}}`
+  sets `DATABASE_URL`. Redis: `berth redis:create` and `redis:link` set
+  `REDIS_URL`. The dev version gets its own empty database, never production's;
+  `berth dev:db:copy {{.App}} -y` loads a copy of production's data.
+- Schema changes are migrations, run by a `release:` line in a `Procfile`
+  (for example `release: npm run migrate`) on every deploy, before the new
+  code takes traffic. While a deploy swaps over, the old code runs against the
+  new schema: add columns before using them, and drop them only a release
+  after the code stops using them. Try migrations with `berth dev:push` first.
+{{- if .SignIn}}
+
+### Sign-in
+
+Berth can put Google sign-in in front of the app:
+`berth access {{.App}} signed-in` (anyone with a Google account),
+`berth access {{.App}} allow @owners` (a group), or per path:
+`berth access {{.App}} /admin allow @owners`. Requests then carry
+`X-Berth-User-Id` (stable; key users on it), `X-Berth-Email`, `X-Berth-Name`
+(URL-encoded) and `X-Berth-Picture`. Berth strips these headers from
+visitors, so they can be trusted. On a public app they're absent for
+anonymous visitors: check them on write endpoints and return 401 without them.
+Links: `/_berth/login?return=/path`, a POST form to `/_berth/logout`, and
+`/_berth/me` (JSON) for single-page apps.
+{{- end}}
+{{- if .AI}}
+
+### AI
+
+`berth ai:enable {{.App}}` gives the app an LLM through Berth's gateway: it sets
+`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_API_KEY`, which the official OpenAI and Anthropic SDKs read on their
+own. Ask for the model `default`, or see `berth ai:models`.
+{{- end}}
+
+### Ask the user first
+
+Pushing to `{{.Branch}}`, `berth rollback`, `berth destroy`, changing
+production's config, and `berth dev:db:copy` all affect real users or data:
+ask before running them. Never push to `{{.Branch}}` just to test something;
+that's what `berth dev:push` is for.
+{{- end}}
+{{- define "agents" -}}
+# {{.App}}
+
+{{.Stack.About}} Replace this line with what the app is for.
+
+## Working on it
+
+{{.Stack.Local}}
+
+{{template "berth" .}}
+{{end}}

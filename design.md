@@ -11,7 +11,7 @@ Target: macOS 26, Apple Silicon. Language: Go (two static binaries, `berth` and 
 **Status (Oct 2026):** v1 is implemented as described here and smoke-tested against Apple's `container` 1.6.1 on macOS 26.1. Not yet exercised end to end: launchd agents, the Cloudflare tunnel, GitHub webhook registration (see Open questions). Sections below describe what the code does; findings from building it are written in place.
 
 ```bash
-brew tap dps/berth https://github.com/dps/berth && brew install berth   # once
+brew tap dps/berth https://github.com/dps/berth && brew install --HEAD berth   # once
 berth init --domain example.com                                       # ~3 minutes
 berth create myapp --repo me/myapp                       # per app
 git push                                                  # every deploy
@@ -47,7 +47,7 @@ The whole product is three moments. Everything in later sections exists to make 
 
 ```bash
 brew tap dps/berth https://github.com/dps/berth   # the formula lives in this repo
-brew install berth                                 # --HEAD until a release is tagged
+brew install --HEAD berth                          # --HEAD until a release is tagged
 berth init --domain example.com
 ```
 
@@ -61,6 +61,8 @@ berth create myapp --repo me/myapp
 # → https://myapp.example.com (DNS live in ~30s)
 # → building main@a1b2c3d ... ✓ running
 ```
+
+Starting from nothing, `berth new myapp` does the steps before this one too: a starter app, `AGENTS.md` for the coding agent, a GitHub repo, then `berth create` (see **Starting a new app**).
 
 If the repo has no Dockerfile, Berth detects the stack (Node/Bun, Python, Go, Rust, static) and uses a built-in template; `berth dockerfile myapp` prints it so you can commit and edit it. Need a database?
 
@@ -299,9 +301,34 @@ then asks berthd to deploy that commit to the dev version. The app is the argume
 
 **Idle dev versions sleep.** The supervisor stops a dev version after 12 hours (`config.json` `dev_idle_hours`) with no deploy and no request (the access log's modification time); its address then says it is asleep. The next `dev:push` (or `berth start <app>-dev`) wakes it.
 
-**For agents.** `berth dev:agents <app>` prints a block for the repo's `AGENTS.md`/`CLAUDE.md`: how to deploy, the URL, how to authenticate (`$BERTH_DEV_TOKEN`, never committed), logs, one-off commands, and the rule that production only changes through a commit and push.
+**For agents.** `berth dev:agents <app>` prints the Berth part of an `AGENTS.md`: how to deploy, the URLs, how to authenticate (`$BERTH_DEV_TOKEN`, never committed), logs, one-off commands, data and migrations, and the rule that production only changes through a commit and push. `berth new` writes the same text into new apps (see **Starting a new app**).
 
 **Not in v1:** promoting dev to production (commit and push instead; production history stays in git), several dev versions per app (per-branch previews), and waking on a request.
+
+## Starting a new app
+
+`berth new <app> [--stack node|python|go|static]` takes someone from an idea to a deployed app that a coding agent can work on, on the Berth Mac or on a laptop (see **Working from another machine**). In order:
+
+1. **Ask Berth about itself.** `berth info` (hidden; JSON: domain, hostname, whether sign-in and the AI gateway are set up) runs locally or over SSH, so the files carry the app's real URLs and only the sections that apply. With no Berth reachable, the URLs are placeholders and the project is still made.
+2. **Write the folder.** A starter that follows the app contract, `AGENTS.md`, `CLAUDE.md`, `README.md` and `.gitignore`, then `git init -b main` and one commit. An existing folder is never touched.
+3. **GitHub, asking first.** With the GitHub CLI logged in: `gh repo create <user>/<app> --private --source . --remote origin --push`. Without it, the three manual steps are printed. Berth's own GitHub token isn't used: it lives on the Mac and has no repo-creation scope, and creating a repo is the user's act on their account, from their machine.
+4. **Berth, asking first.** `berth create <app> --repo <user>/<app>`, locally or over SSH, then (on a laptop) the `berth` git remote, so `berth` commands and `dev:push` in the repo reach the Mac.
+
+Prompts default to yes; with no terminal to answer them they're a no unless `-y` is given, so a script never creates a repo by accident. `--no-github` and `--no-deploy` stop earlier.
+
+**`AGENTS.md` is the instructions file.** It's the cross-agent convention (Codex, Cursor, Copilot, Gemini and others read it); `CLAUDE.md` is the one line `@AGENTS.md`, which Claude Code expands, so there's one source. It covers: running locally; production deploys from pushes to `main`, which only happen when the user asks; `berth dev:push` with its exit codes and the dev token; the app contract and `BERTH_HEALTHCHECK`; logs, status, config and one-off commands; Postgres and Redis, migrations as a `release:` command and the expand-then-contract rule; sign-in headers and paths and the AI gateway when they're set up; and what to ask the user before doing (pushing to `main`, rollback, destroy, production config, `dev:db:copy`). The Berth part is the `berth` block of the same template `dev:agents` prints, so the two can't drift.
+
+**Starters are small and dependency-free where possible:** Node's `http` module, Go's standard library, FastAPI for Python (the one Berth's detection runs with uvicorn), and a static `index.html`. Each answers `/` (which the deploy health check uses) and `/healthz`. They live in `templates/new/<stack>`, rendered with `text/template`; files are stored as `gitignore` and `*.tmpl` so they don't apply to Berth's own repo or join its Go build.
+
+**Results:** a test runs `berth new` from a pretend laptop against fake `ssh` and `gh` and checks every call; another renders every starter and runs Berth's stack detection on it. On the test Mac, each of the four starters was created with `berth new`, deployed with `berth create`, healthy in at most 1 s, and served its page through the tunnel.
+
+## Working from another machine
+
+The Mac may be in a closet; the editor and the coding agent are on a laptop. So the CLI works there too: **on a machine without Berth** (no `~/.berth/config.json`), a command runs on the Berth Mac as `ssh [-t] [-p port] <mac> 'PATH=… berth <args>'`. The Mac is `$BERTH_HOST` (`you@mac.local`, or an `ssh://` URL), else the host in the current repo's `berth` git remote, so an agent in an app's repo needs no setup. Every argument is single-quoted for the remote shell; the host (from `BERTH_HOST` or the remote URL) can't start with `-` or contain spaces or quotes, and follows `--`, so it can't smuggle in ssh options. `-t` is used only when stdin and stdout are both terminals, so prompts, `logs -f` and `berth run` shells work and `--json` output stays clean. Exit codes pass through (so `dev:push`-style codes and scripts work); ssh's own failure (255) gets a hint about Remote Login and keys. The laptop needs only the CLI; the Homebrew formula requires macOS 26 on Apple Silicon (for `container`), so other machines use `go install github.com/dps/berth/cmd/berth@latest`, which builds for Intel Macs and Linux too.
+
+A few commands do their work locally instead: `new` and `dev:push` (they use local files), `git:remote` (it asks the Mac for the repo URL with `--print`, then adds the remote here, with the host as this machine reaches it), `admin` (it asks the Mac for the address and opens it here), `init`, `uninstall`, `trust-ca`, help and completion. `config:import` sends the local file on stdin (it accepts `-`); any other path argument is a path on the Mac.
+
+Why SSH rather than a network API: SSH is already the trust boundary for `git push berth` and remote `dev:push`, it brings its own keys and host verification, and berthd keeps listening only on a unix socket. The cost is that the Mac's `berth` must understand the command: a newer laptop CLI asking an older Mac for `berth info` gets a hint to upgrade the Mac.
 
 ## AI gateway
 
@@ -468,7 +495,7 @@ The Mac should run for months in a closet with nobody logged in at the screen. F
 
 Which mode is active is recorded in `config.json`, reported by `berth doctor`, and included in `berth status --json`.
 
-**Updates**: `brew upgrade berth` replaces the binaries; berthd notices its binary changed (checked every 10 s), waits until no deploy is running, and re-executes itself in place; running apps are untouched. Caddy, cloudflared and `container` are updated by Homebrew independently; Berth records the `container` version it was tested against in `config.json` and `berth doctor` warns on a different one.
+**Updates**: `brew upgrade berth` (`brew upgrade --fetch-HEAD berth` while installs are `--HEAD`) replaces the binaries; berthd notices its binary changed (checked every 10 s), waits until no deploy is running, and re-executes itself in place; running apps are untouched. Caddy, cloudflared and `container` are updated by Homebrew independently; Berth records the `container` version it was tested against in `config.json` and `berth doctor` warns on a different one.
 
 **Resource limits**: default per app 512 MB / 1 CPU, settable with `BERTH_MEMORY`/`BERTH_CPUS`. A 16 GB Mac mini runs \~20 small apps plus Postgres comfortably; `berth status` warns when committed memory exceeds 80% of physical.
 
@@ -486,6 +513,7 @@ The attack surface is two HTTP endpoints behind Cloudflare, nothing else. The th
 - **Input validation**: values that reach git, shell hooks, Caddy matchers or Cloudflare expressions are validated where they enter: branches, paths and refs follow git ref rules and can't start with `-`; repos can't start with `-` or contain shell metacharacters; custom domains must be plain hostnames (no wildcards) and can't collide with `hooks.<domain>`, another app's `<app>.<domain>` or LAN names; the `git push berth` hook single-quotes every field anyway.
 - **Supply chain**: images are pulled from the registry the Dockerfile names; Berth templates pin major tags (`node:22-slim`, `postgres:17`). `berth doctor --images` lists images with available updates.
 - **Sign-in**: Google login runs in berthd behind Caddy's `forward_auth` (see Sign-in). Clients can't forge identity headers (Caddy deletes `X-Berth-*` on every route); one-time codes, nonce cookies and PKCE protect the login hand-off; redirects only go to Berth app hostnames and same-host paths; logout is POST with an Origin check; sessions are stored hashed. If berthd is down, apps with a policy answer 502, so `allow` and `signed-in` apps fail closed.
+- **Working from another machine** adds no listener: commands travel over the user's own SSH, as the Mac's user, with every argument single-quoted.
 - **Admin page**: only `@owners`, checked twice (Caddy's sign-in check, then berthd verifying the signed identity for the admin hostname); read-only; strict CSP; never shows env values.
 - **AI gateway**: provider keys never leave berthd; apps get per-app tokens (stored hashed) that only the gateway accepts, limited by model, tokens a month and requests a minute. The gateway port answers only the container network and loopback. Prompts aren't logged.
 - **Public by default is a choice**: `berth create --private` creates the app with no public hostname: its Caddy route matches only LAN hosts, so tunnel requests for it get a 404; `berth auth:set` adds basic auth in Caddy; both are one flag because the hobbyist default should be safe to flip either way.
@@ -497,6 +525,7 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | Command | Does | Dokku |
 | --- | --- | --- |
 | `berth init --domain d [--no-tunnel] [--cf-ip-filter] [--unattended] [--github-token t] [--cf-token t] [--no-launchd] [--yes]` | one-time setup of tunnel, Caddy, launchd, GitHub login | bootstrap.sh |
+| `berth new <app> [--stack node\|python\|go\|static] [--repo r] [--public] [--no-github] [--no-deploy] [-y]` | a starter app with `AGENTS.md`, a GitHub repo through `gh`, then `create` | — |
 | `berth create <app> [--repo owner/name\|url\|path] [--branch b] [--path p] [--private] [--no-webhook] [--no-deploy]` | register app, webhook, hostname; first deploy | `apps:create` + git remote |
 | `berth deploy <app> [--ref sha] [--no-cache]` | build + release now | `git push dokku` |
 | `berth rollback <app> [n] [--with-data] [--yes]` | swap to previous (or release n); `--with-data` also restores the databases from before the later release's command ran | `ps:rebuild` / manual |
@@ -519,7 +548,7 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth run <app> <cmd>` | one-off command in a fresh container with the app's env (migrations) | `run` |
 | `berth exec <app> <cmd>` | shell into the running container | `enter` |
 | `berth dockerfile <app>` | print the template Berth would use | — |
-| `berth git:remote <app> [--host h]` | add a `berth` SSH remote for push-to-deploy | built in |
+| `berth git:remote <app> [--host h]` | add a `berth` SSH remote for push-to-deploy, `dev:push` and running commands from another machine | built in |
 | `berth app:set-key <app>` | fetch over SSH with a generated deploy key | `git:*` |
 | `berth app:set-repo <app> <repo> [--branch b]` | change an app's source; keeps config, links and releases, moves the webhook, records the live sha so nothing redeploys | — |
 | `berth doctor` / `berth events` / `berth gc` / `berth backup` / `berth restore` | ops | — |
@@ -529,6 +558,8 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth trust-ca` | trust Caddy's local CA in the login keychain | — |
 | `berth uninstall [--purge]` | remove the launchd agents and stop everything (`--purge` also deletes apps, volumes, images and `~/.berth`) | — |
 | `berth notify:set <url\|off>` | deploy/crash notifications | — |
+
+On a machine without Berth, every command except `new`, `dev:push`, `git:remote`, `admin` and setup runs on the Mac over SSH (`$BERTH_HOST`, or the repo's `berth` remote).
 
 Output conventions: success ends with the URL or the next command; errors are one line plus `berth doctor` or `berth logs` as the pointer; long operations stream (`building ... ✓ 23 s`). Shell completions (`berth completion zsh|bash|fish`) ship with the brew formula.
 

@@ -104,7 +104,7 @@ func NewRoot() *cobra.Command {
 		}
 	}
 	add("daily", cmdDeploy(), cmdRollback(), cmdLogs(), cmdStatus(), cmdConfigSet(), cmdRestart())
-	add("apps", cmdCreate(), cmdDestroy(), cmdStop(), cmdStart(), cmdReleases(),
+	add("apps", cmdNew(), cmdCreate(), cmdDestroy(), cmdStop(), cmdStart(), cmdReleases(),
 		cmdConfigGet(), cmdConfigUnset(), cmdConfigShow(), cmdConfigImport(),
 		cmdDomainsAdd(), cmdDomainsRemove(), cmdDomainsList(),
 		cmdAuthSet(), cmdAuthUnset(), cmdAccess(),
@@ -121,37 +121,46 @@ func NewRoot() *cobra.Command {
 	add("services", serviceCommands("redis")...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),
 		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUninstall())
+	root.AddCommand(cmdInfo())
 	return root
 }
 
 // Execute runs the CLI and returns the process exit code.
 func Execute() int {
 	root := NewRoot()
+	if code, ok := forward(root, os.Args[1:]); ok {
+		return code
+	}
 	if err := root.Execute(); err != nil {
-		var silent *silentExit
-		if errors.As(err, &silent) {
-			return silent.code
-		}
-		if jsonOut {
-			b, _ := json.Marshal(map[string]string{"error": err.Error()})
-			fmt.Fprintln(os.Stdout, string(b))
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, " !     %s\n", err)
-		var ee *exitError
-		switch {
-		case errors.As(err, &ee) && ee.hint != "":
-			fmt.Fprintf(os.Stderr, " !     %s\n", ee.hint)
-		case errors.Is(err, rpc.ErrDaemonDown), errors.Is(err, state.ErrNotInitialized):
-		case strings.Contains(err.Error(), "deploy") || strings.Contains(err.Error(), "health"):
-			fmt.Fprintln(os.Stderr, " !     see `berth logs <app> --build` and `berth logs <app>`")
-		}
-		if ee != nil && ee.code != 0 {
-			return ee.code
-		}
-		return 1
+		return printErr(err)
 	}
 	return 0
+}
+
+// printErr prints a command's error and returns its exit code.
+func printErr(err error) int {
+	var silent *silentExit
+	if errors.As(err, &silent) {
+		return silent.code
+	}
+	if jsonOut {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintln(os.Stdout, string(b))
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, " !     %s\n", err)
+	var ee *exitError
+	switch {
+	case errors.As(err, &ee) && ee.hint != "":
+		fmt.Fprintf(os.Stderr, " !     %s\n", ee.hint)
+	case errors.Is(err, rpc.ErrDaemonDown), errors.Is(err, state.ErrNotInitialized):
+	case strings.Contains(err.Error(), "deploy") || strings.Contains(err.Error(), "health"):
+		fmt.Fprintln(os.Stderr, " !     see `berth logs <app> --build` and `berth logs <app>`")
+	}
+	if ee != nil && ee.code != 0 {
+		return ee.code
+	}
+	return 1
 }
 
 // appArg validates the app name argument exists.

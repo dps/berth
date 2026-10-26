@@ -1,0 +1,14 @@
+# {{.App}}
+
+{{.Stack.About}}
+
+- Production: {{.Prod}}
+- Dev version: {{.Dev}}
+
+## Working on it
+
+{{.Stack.Local}}
+
+Deployed with [Berth](https://github.com/dps/berth): push to `{{.Branch}}` to
+ship, or run `berth dev:push` to try uncommitted changes on the dev version.
+Coding agents: see [AGENTS.md](AGENTS.md).

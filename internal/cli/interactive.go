@@ -133,11 +133,19 @@ func cmdExec() *cobra.Command {
 
 func cmdGitRemote() *cobra.Command {
 	var host, name string
+	var printURL bool
 	c := &cobra.Command{
 		Use:   "git:remote <app>",
 		Short: "Add a `berth` git remote so `git push berth main` deploys over SSH",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !isBerthMac() {
+				t, err := berthTarget()
+				if err != nil {
+					return err
+				}
+				return addRemote(t, args[0], host, name)
+			}
 			app, err := appArg(args)
 			if err != nil {
 				return err
@@ -155,6 +163,10 @@ func cmdGitRemote() *cobra.Command {
 			}
 			u, _ := user.Current()
 			url := fmt.Sprintf("ssh://%s@%s%s", u.Username, host, res["repo"])
+			if printURL {
+				fmt.Println(url)
+				return nil
+			}
 			if out, err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Output(); err != nil || strings.TrimSpace(string(out)) != "true" {
 				fmt.Printf("Not in a git repo. In your app's repo run:\n  git remote add %s %s\n", name, url)
 				return nil
@@ -171,5 +183,34 @@ func cmdGitRemote() *cobra.Command {
 	}
 	c.Flags().StringVar(&host, "host", "", "SSH host of the Mac (default <hostname>.local)")
 	c.Flags().StringVar(&name, "name", "berth", "remote name")
+	c.Flags().BoolVar(&printURL, "print", false, "only print the remote's URL")
+	c.Flags().MarkHidden("print")
 	return c
+}
+
+// addRemote adds the `berth` remote on a machine without Berth: the Mac
+// works out the URL, with the host as this machine reaches it.
+func addRemote(t *sshTarget, app, host, name string) error {
+	if host == "" {
+		host = t.hostname()
+		if t.port != "" {
+			host += ":" + t.port
+		}
+	}
+	out, err := t.output("git:remote", app, "--host", host, "--print")
+	if err != nil {
+		return err
+	}
+	url := strings.TrimSpace(string(out))
+	if _, err := gitIn(".", nil, "rev-parse", "--is-inside-work-tree"); err != nil {
+		fmt.Printf("Not in a git repo. In your app's repo run:\n  git remote add %s %s\n", name, url)
+		return nil
+	}
+	exec.Command("git", "remote", "remove", name).Run()
+	if out, err := exec.Command("git", "remote", "add", name, url).CombinedOutput(); err != nil {
+		return fmt.Errorf("git remote add: %s", out)
+	}
+	fmt.Printf("-----> Added remote %q → %s\n", name, url)
+	fmt.Println("       berth commands in this repo now reach the Mac, and `berth dev:push` deploys from here")
+	return nil
 }

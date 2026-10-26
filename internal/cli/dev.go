@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -133,7 +134,7 @@ func findDevTarget(top, appName string) (*devTarget, error) {
 	// Another Mac: the `berth` remote that `berth git:remote` adds.
 	raw, err := gitIn(top, nil, "remote", "get-url", "berth")
 	if err != nil {
-		return nil, fmt.Errorf("which app? Run `berth dev:push <app>` on the Berth Mac, or add a `berth` remote there with `berth git:remote <app> --host <this machine's view of the Mac>`")
+		return nil, hintErr(errors.New("which app?"), "on the Berth Mac run `berth dev:push <app>`; elsewhere add the `berth` remote once, in this repo: BERTH_HOST=<user>@<mac> berth git:remote <app>")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "ssh" {
@@ -430,14 +431,14 @@ func cmdDevOnOff(off bool) *cobra.Command {
 func cmdDevAgents() *cobra.Command {
 	return &cobra.Command{
 		Use:   "dev:agents <app>",
-		Short: "Print instructions for coding agents (paste into AGENTS.md or CLAUDE.md)",
+		Short: "Print instructions for coding agents (berth new writes them to AGENTS.md)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := parentArg(args)
 			if err != nil {
 				return err
 			}
-			cfg, err := store().Config()
+			info, err := localInfo()
 			if err != nil {
 				return err
 			}
@@ -445,37 +446,11 @@ func cmdDevAgents() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			dev := state.DevName(app)
-			devApp := &state.App{Name: dev, Private: a.Private}
-			urls := daemon.AppURLs(cfg, devApp)
-			u := "(no URL)"
-			if len(urls) > 0 {
-				u = urls[0]
+			d := newAgentsData(app, info)
+			if a.Branch != "" {
+				d.Branch = a.Branch
 			}
-			fmt.Printf(`## Testing changes on Berth
-
-This app runs on Berth. Production (%[1]s) deploys only from commits pushed to
-its branch. To try changes before committing, use its dev version:
-
-- Deploy the working tree, uncommitted changes included: `+"`berth dev:push`"+`
-  (add `+"`--json`"+` for a structured result). Exit code 0 = live, 1 = build failed,
-  2 = the app failed to start, 3 = the release command (migrations) failed; the
-  output on failure says why.
-- Dev URL: %[2]s
-  It needs a token: `+"`curl -H \"Authorization: Bearer $BERTH_DEV_TOKEN\" %[2]s/...`"+`.
-  If BERTH_DEV_TOKEN isn't set, ask the user to run
-  `+"`berth dev:token %[1]s --as test@example.com`"+` (requests are then signed in as that test user).
-- Logs: `+"`berth logs %[3]s -n 200`"+` (`+"`--build`"+` for the last build, `+"`--release`"+` for the
-  last release command). One-off commands: `+"`berth run %[3]s <command>`"+`.
-  Config: `+"`berth config:set %[3]s KEY=value`"+`.
-- Schema changes are migrations run by the Procfile's `+"`release:`"+` command on every deploy,
-  before the new code takes traffic. Add a migration, then `+"`berth dev:push`"+` to run it on
-  the dev database. While a deploy swaps over, the old code runs against the new schema,
-  so add columns before using them and drop them only a release after the code stops.
-- The dev version has its own database, separate from production's.
-  `+"`berth dev:reset %[1]s`"+` starts it over; `+"`berth dev:db:copy %[1]s -y`"+` loads a copy of production's data.
-- Never push to the production branch just to test something.
-`, app, u, dev)
+			fmt.Print(renderAgents(d, "berth"))
 			return nil
 		},
 	}

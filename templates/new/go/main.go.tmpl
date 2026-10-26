@@ -1,0 +1,30 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+)
+
+const page = `<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.App}}</title>
+<body style="font: 18px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem">
+<h1>{{.App}}</h1>
+<p>It's live. Edit <code>main.go</code> and push to deploy.</p>
+</body>`
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, page)
+	})
+	log.Printf("{{.App}} listening on :%s", port)
+	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, nil))
+}

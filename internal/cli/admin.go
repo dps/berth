@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,14 +19,28 @@ func cmdAdmin() *cobra.Command {
 		Short: "Open the admin page (status, analytics, logs) in the browser",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ac, err := store().AuthConfig()
-			if err != nil {
-				return err
+			var url string
+			if isBerthMac() {
+				ac, err := store().AuthConfig()
+				if err != nil {
+					return err
+				}
+				if ac.AdminHost == "" {
+					return fmt.Errorf("the admin page is off: berth admin:enable")
+				}
+				url = "https://" + ac.AdminHost
+			} else {
+				// Ask the Mac, and open the page here.
+				t, err := berthTarget()
+				if err != nil {
+					return err
+				}
+				out, err := t.output("admin", "--no-browser")
+				if err != nil {
+					return err
+				}
+				url = strings.TrimSpace(string(out))
 			}
-			if ac.AdminHost == "" {
-				return fmt.Errorf("the admin page is off: berth admin:enable")
-			}
-			url := "https://" + ac.AdminHost
 			fmt.Println(url)
 			if !noBrowser {
 				exec.Command("open", url).Run()

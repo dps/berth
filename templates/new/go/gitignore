@@ -1,0 +1,4 @@
+/{{.App}}
+.env
+.env.*
+.DS_Store

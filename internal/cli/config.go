@@ -154,7 +154,7 @@ func cmdConfigShow() *cobra.Command {
 func cmdConfigImport() *cobra.Command {
 	var noRestart, replace bool
 	c := &cobra.Command{
-		Use:   "config:import <app> <.env file>",
+		Use:   "config:import <app> <.env file|->",
 		Short: "Set env vars from a .env file",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -162,11 +162,13 @@ func cmdConfigImport() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			f, err := os.Open(args[1])
-			if err != nil {
-				return err
+			f := os.Stdin
+			if args[1] != "-" {
+				if f, err = os.Open(args[1]); err != nil {
+					return err
+				}
+				defer f.Close()
 			}
-			defer f.Close()
 			env, err := state.ParseEnv(f)
 			if err != nil {
 				return fmt.Errorf("%s: %w", args[1], err)
