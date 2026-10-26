@@ -650,7 +650,9 @@ On a `public` app, the headers are absent for anonymous visitors. That's the
 pattern for a site anyone can read where signed-in people can post: check the
 header on your write endpoints and return 401 without it.
 
-Every app with a policy also has:
+Every app with a policy also has these paths. On an app without one they
+answer 404 with a note saying to run `berth access myapp public`, which keeps
+the app open to everyone and turns them on:
 
 | Path | What |
 | --- | --- |

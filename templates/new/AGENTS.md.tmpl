@@ -59,16 +59,32 @@ and builds it; a `Dockerfile` at the repo root replaces that, and
 
 ### Sign-in
 
-Berth can put Google sign-in in front of the app:
-`berth access {{.App}} signed-in` (anyone with a Google account),
-`berth access {{.App}} allow @owners` (a group), or per path:
-`berth access {{.App}} /admin allow @owners`. Requests then carry
-`X-Berth-User-Id` (stable; key users on it), `X-Berth-Email`, `X-Berth-Name`
-(URL-encoded) and `X-Berth-Picture`. Berth strips these headers from
-visitors, so they can be trusted. On a public app they're absent for
-anonymous visitors: check them on write endpoints and return 401 without them.
-Links: `/_berth/login?return=/path`, a POST form to `/_berth/logout`, and
-`/_berth/me` (JSON) for single-page apps.
+Berth runs Google sign-in for the app, so don't write OAuth code. It works
+only once the app has an **access policy**, and a new app has none:
+`berth access {{.App}}` shows it. Without one, the headers below never arrive
+and the `/_berth/` links answer 404 in production.
+
+- `berth access {{.App}} public`: anyone can visit; signed-in people are
+  identified. Use this for "Sign in" links on an open site.
+- `berth access {{.App}} signed-in`: any Google account, or
+  `berth access {{.App}} allow @owners` for a group.
+- Per path: `berth access {{.App}} /admin/* allow @owners`.
+
+Setting the policy changes production: ask the user to run it, and do that
+before shipping code that relies on sign-in. The dev version always has a
+policy (`@owners`), so sign-in working there doesn't mean it works in
+production.
+
+With a policy, requests carry `X-Berth-User-Id` (stable; key users on it),
+`X-Berth-Email`, `X-Berth-Name` (URL-encoded) and `X-Berth-Picture`. Berth
+strips these from visitors, so they can be trusted. On a `public` app they're
+absent for anonymous visitors: check them on write endpoints and return 401
+without them. Berth serves these paths on the app's own host:
+`/_berth/login?return=/path` (sign in, then come back), a POST form to
+`/_berth/logout?return=/path`, and `/_berth/me` (JSON) for single-page apps.
+
+To test on the dev version, a token made with `--as` signs requests in as
+that user; one made without `--as` makes them anonymous.
 {{- end}}
 {{- if .AI}}
 
@@ -83,7 +99,7 @@ own. Ask for the model `default`, or see `berth ai:models`.
 ### Ask the user first
 
 Pushing to `{{.Branch}}`, `berth rollback`, `berth destroy`, changing
-production's config, and `berth dev:db:copy` all affect real users or data:
+production's config or access policy, and `berth dev:db:copy` all affect real users or data:
 ask before running them. Never push to `{{.Branch}}` just to test something;
 that's what `berth dev:push` is for.
 {{- end}}

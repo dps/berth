@@ -40,7 +40,7 @@ func TestAgentsMD(t *testing.T) {
 	d := newAgentsData("demo", &BerthInfo{Domain: "example.com", SignIn: true})
 	d.Stack = stacks["node"]
 	md := renderAgents(d, "agents")
-	for _, want := range []string{"# demo", "https://demo.example.com", "https://demo-dev.example.com", "berth dev:push", "berth logs demo-dev", "### Sign-in", "npm run dev"} {
+	for _, want := range []string{"# demo", "https://demo.example.com", "https://demo-dev.example.com", "berth dev:push", "berth logs demo-dev", "### Sign-in", "berth access demo public", "npm run dev"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("AGENTS.md has no %q", want)
 		}

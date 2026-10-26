@@ -68,3 +68,20 @@ func TestLoad(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestBerthPathsWithoutPolicy(t *testing.T) {
+	build := func(authHost string) string {
+		b, _ := json.Marshal(Build(Options{
+			Admin: "127.0.0.1:2019", HTTPListen: "127.0.0.1:80", StorageDir: "/tmp/c", AuthAddr: "127.0.0.1:7781", AuthHost: authHost,
+			Routes: []Route{{App: "web", PublicHosts: []string{"web.example.com"}, Service: "web"}},
+		}))
+		return string(b)
+	}
+	// With sign-in set up, an app without a policy explains its /_berth/ links.
+	if s := build("auth.example.com"); !strings.Contains(s, "berth access web public") {
+		t.Errorf("no explanation for /_berth/ on an app without a policy:\n%s", s)
+	}
+	if s := build(""); strings.Contains(s, "/_berth/") {
+		t.Errorf("/_berth/ routed without sign-in set up:\n%s", s)
+	}
+}

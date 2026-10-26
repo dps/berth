@@ -257,6 +257,24 @@ func handlers(r Route, o Options) []any {
 			obj{"handle": rest},
 		}})
 	}
+	if o.AuthHost != "" {
+		// Sign-in is set up, but this app has no policy, so its /_berth/
+		// links would reach the app and 404 there. Say why instead.
+		return append(hs, obj{"handler": "subroute", "routes": []any{
+			obj{
+				"match": []any{obj{"path": []string{"/_berth/*"}}},
+				"handle": []any{obj{
+					"handler":     "static_response",
+					"status_code": 404,
+					"body": fmt.Sprintf("Sign-in isn't turned on for %s, so Berth's /_berth/ pages don't exist here yet.\n"+
+						"To turn it on and keep the app open to everyone, run: berth access %s public\n", r.App, r.App),
+					"headers": obj{"Content-Type": []string{"text/plain; charset=utf-8"}},
+				}},
+				"terminal": true,
+			},
+			obj{"handle": appHandlers(r, o)},
+		}})
+	}
 	return append(hs, appHandlers(r, o)...)
 }
 
