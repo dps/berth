@@ -59,6 +59,7 @@ func (d *Daemon) handlers() map[string]handler {
 		"dev.reset":       d.hDevReset,
 		"dev.set":         d.hDevSet,
 		"dev.token":       d.hDevToken,
+		"admin.enable":    d.hAdminEnable,
 		"ai.setup":        d.hAISetup,
 		"ai.key":          d.hAIKey,
 		"ai.alias":        d.hAIAlias,
@@ -453,6 +454,9 @@ func (d *Daemon) destroyApp(ctx context.Context, app *state.App, keepData bool, 
 	d.mu.Lock()
 	delete(d.crash, app.Name)
 	d.mu.Unlock()
+	if d.stats != nil {
+		d.stats.Forget(app.Name)
+	}
 	d.Apply(ctx)
 	if len(app.Domains) > 0 {
 		d.ApplyTunnel(ctx, true)
@@ -680,6 +684,9 @@ func (d *Daemon) reservedHost(cfg *state.Config, host string) string {
 		}
 		if ac, _ := d.Store.AuthConfig(); ac != nil && host == ac.Host {
 			return "Berth's sign-in hostname"
+		}
+		if ac, _ := d.Store.AuthConfig(); ac != nil && host == ac.AdminHost {
+			return "Berth's admin hostname"
 		}
 		if first, rest, ok := strings.Cut(host, "."); ok && rest == cfg.Domain && d.Store.AppExists(first) {
 			return "the hostname of app " + first

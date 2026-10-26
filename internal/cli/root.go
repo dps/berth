@@ -84,7 +84,7 @@ func hintErr(err error, hint string) error {
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "berth",
-		Short:         "A Dokku for Mac minis: git push and your app is live",
+		Short:         "A dead simple PaaS for Mac minis: git push and your app is live",
 		Long:          "Berth turns an Apple Silicon Mac into a small PaaS: push to GitHub and the app is live at https://<app>.<your domain>.\n\nStart with `berth init --domain example.com`, then `berth create <app> --repo owner/name`.",
 		Version:       Version,
 		SilenceUsage:  true,
@@ -112,8 +112,9 @@ func NewRoot() *cobra.Command {
 		cmdRun(), cmdExec(), cmdDockerfile(), cmdGitRemote(), cmdSetKey(), cmdSetRepo())
 	root.AddGroup(&cobra.Group{ID: "dev", Title: "Dev versions (<app>-dev.<domain>; app commands also work on <app>-dev):"})
 	add("dev", cmdDevPush(), cmdDevToken(), cmdDevDBCopy(), cmdDevReset(), cmdDevAgents(), cmdDevOnOff(true), cmdDevOnOff(false), cmdDevDeploy())
-	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in:"})
+	root.AddGroup(&cobra.Group{ID: "signin", Title: "Sign-in and admin page:"})
 	add("signin", cmdAuthSetup(), cmdAuthStatus(), cmdAuthGroup(), cmdAuthSessions(), cmdAuthRevoke())
+	add("signin", cmdAdmin(), cmdAdminEnable(), cmdAdminDisable())
 	root.AddGroup(&cobra.Group{ID: "ai", Title: "AI gateway:"})
 	add("ai", cmdAISetup(), cmdAIStatus(), cmdAIModels(), cmdAIKey(), cmdAIAlias(), cmdAIPull(), cmdAIEnable(), cmdAIDisable(), cmdAIUsage())
 	add("services", serviceCommands("pg")...)

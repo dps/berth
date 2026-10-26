@@ -80,6 +80,7 @@ type Config struct {
 	DNSAddr        string `json:"dns_addr"`       // berthd\'s SRV responder for Caddy upstreams
 	AuthAddr       string `json:"auth_addr"`      // berthd's sign-in server, behind Caddy
 	AIAddr         string `json:"ai_addr"`        // berthd's AI gateway, behind Caddy
+	AdminAddr      string `json:"admin_addr"`     // berthd's admin page, behind Caddy and sign-in
 	AIPort         int    `json:"ai_port"`        // where apps reach the AI gateway on the berth network gateway
 	PortMin        int    `json:"port_min"`
 	PortMax        int    `json:"port_max"`
@@ -110,6 +111,7 @@ func DefaultConfig() *Config {
 		DNSAddr:         "127.0.0.1:7753",
 		AuthAddr:        "127.0.0.1:7781",
 		AIAddr:          "127.0.0.1:7782",
+		AdminAddr:       "127.0.0.1:7783",
 		AIPort:          7790,
 		PortMin:         8001,
 		PortMax:         8999,
@@ -228,7 +230,7 @@ func (a *App) CloneURL() string {
 
 var appNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-var reservedNames = map[string]bool{"hooks": true, "berth": true, "www": true, "auth": true}
+var reservedNames = map[string]bool{"hooks": true, "berth": true, "www": true, "auth": true, "admin": true}
 
 // ValidateAppName enforces DNS-label names that do not collide with
 // Berth's own hostnames or service container names.
@@ -525,4 +527,28 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// AccessLog is where Caddy writes the app's request log. The name is unique
+// to this incarnation of the app: Caddy keeps a log file open across
+// reloads for as long as some logger names it, so an app destroyed and
+// created again under the same name would otherwise go on writing into the
+// deleted file.
+func (s *Store) AccessLog(a *App) string {
+	return s.Path("apps", a.Name, "logs", "access."+strconv.FormatInt(a.CreatedAt.Unix(), 36)+".log")
+}
+
+// AccessLogs lists every request log of an app, oldest first: current and
+// rotated files, including ones from before AccessLog's naming.
+func (s *Store) AccessLogs(app string) []string {
+	files, _ := filepath.Glob(s.Path("apps", app, "logs", "access*.log"))
+	sort.Slice(files, func(i, j int) bool {
+		fi, _ := os.Stat(files[i])
+		fj, _ := os.Stat(files[j])
+		if fi == nil || fj == nil {
+			return files[i] < files[j]
+		}
+		return fi.ModTime().Before(fj.ModTime())
+	})
+	return files
 }

@@ -27,6 +27,7 @@ func (d *Daemon) startAuth(cfg *state.Config) (*http.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sign-in key: %w", err)
 	}
+	d.authKey = key
 	d.auth = auth.NewServer(auth.OpenSessions(d.Store.Path("auth", "sessions.json")), key)
 	d.configureAuth()
 	ln, err := net.Listen("tcp", cfg.AuthAddr)
@@ -79,12 +80,26 @@ type AuthSetupParams struct {
 // wildcard DNS record, tunnel rule and Cloudflare certificate), isn't an
 // app, and has no DNS record of its own pointing somewhere else.
 func (d *Daemon) checkSignInHost(ctx context.Context, cfg *state.Config, host string) error {
+	return d.checkBerthHost(ctx, cfg, host, "signin")
+}
+
+// checkBerthHost checks a hostname Berth serves itself (sign-in, admin):
+// one level under the domain (inside the tunnel's wildcard), not an app's,
+// and with no DNS record of its own pointing elsewhere.
+func (d *Daemon) checkBerthHost(ctx context.Context, cfg *state.Config, host, kind string) error {
+	example, alt := "auth", "signin"
+	if kind == "admin" {
+		example, alt = "admin", "dashboard"
+	}
 	label, rest, _ := strings.Cut(host, ".")
 	if err := state.ValidateHostname(host); err != nil || rest != cfg.Domain {
-		return fmt.Errorf("the sign-in host must be a name directly under %s, like auth.%s", cfg.Domain, cfg.Domain)
+		return fmt.Errorf("%s must be a name directly under %s, like %s.%s", host, cfg.Domain, example, cfg.Domain)
 	}
 	if label == "hooks" || d.Store.AppExists(label) {
 		return fmt.Errorf("%s is already used by Berth or an app; pick another with --host", host)
+	}
+	if ac, _ := d.Store.AuthConfig(); ac != nil && (kind == "signin" && host == ac.AdminHost || kind == "admin" && host == ac.Host) {
+		return fmt.Errorf("%s is already used by Berth; pick another with --host", host)
 	}
 	_, cert := tunnel.CertForHost(d.zoneCertDir(), host)
 	if cert == "" {
@@ -102,7 +117,7 @@ func (d *Daemon) checkSignInHost(ctx context.Context, cfg *state.Config, host st
 	target := cfg.TunnelID + ".cfargotunnel.com"
 	for _, r := range recs {
 		if !(r.Type == "CNAME" && r.Content == target) {
-			return fmt.Errorf("%s already has its own DNS record (%s %s), so it doesn't reach Berth. Pick another name with --host, e.g. --host signin.%s", host, r.Type, r.Content, cfg.Domain)
+			return fmt.Errorf("%s already has its own DNS record (%s %s), so it doesn't reach Berth. Pick another name with --host, e.g. --host %s.%s", host, r.Type, r.Content, alt, cfg.Domain)
 		}
 	}
 	return nil

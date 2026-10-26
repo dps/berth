@@ -421,3 +421,30 @@ func TestAccessFor(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyIdentity(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	now := time.Now()
+	id := Identity{Provider: "google", Subject: "7", Email: "a@b.com", Name: "A"}
+	tok := identityJWT(key, "auth.example.com", "admin.example.com", id, now)
+	pub := key.Public().(ed25519.PublicKey)
+	c, err := VerifyIdentity(pub, tok, "admin.example.com", now)
+	if err != nil || c.Email != "a@b.com" || c.Subject != "google:7" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, err := VerifyIdentity(pub, tok, "chirp.example.com", now); err == nil {
+		t.Fatal("accepted a token for another host")
+	}
+	if _, err := VerifyIdentity(pub, tok, "admin.example.com", now.Add(6*time.Minute)); err == nil {
+		t.Fatal("accepted an expired token")
+	}
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	if _, err := VerifyIdentity(other.Public().(ed25519.PublicKey), tok, "admin.example.com", now); err == nil {
+		t.Fatal("accepted another key's signature")
+	}
+	parts := strings.Split(tok, ".")
+	forged := parts[0] + "." + b64json(map[string]any{"aud": "admin.example.com", "email": "evil@x.com", "exp": now.Add(time.Hour).Unix()}) + "." + parts[2]
+	if _, err := VerifyIdentity(pub, forged, "admin.example.com", now); err == nil {
+		t.Fatal("accepted forged claims")
+	}
+}

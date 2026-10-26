@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -61,4 +63,55 @@ func JWKS(key ed25519.PrivateKey) []byte {
 func b64json(v any) string {
 	b, _ := json.Marshal(v)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// IdentityClaims are what VerifyIdentity returns from X-Berth-Identity.
+type IdentityClaims struct {
+	Issuer   string `json:"iss"`
+	Audience string `json:"aud"`
+	Subject  string `json:"sub"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Expires  int64  `json:"exp"`
+}
+
+// VerifyIdentity checks an X-Berth-Identity token: signed by key, for
+// audience (the host it was issued for), not expired.
+func VerifyIdentity(key ed25519.PublicKey, token, audience string, now time.Time) (*IdentityClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("malformed identity token")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !ed25519.Verify(key, []byte(parts[0]+"."+parts[1]), sig) {
+		return nil, errors.New("bad identity signature")
+	}
+	var head struct {
+		Alg string `json:"alg"`
+	}
+	hb, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	if json.Unmarshal(hb, &head) != nil || head.Alg != "EdDSA" {
+		return nil, errors.New("unexpected identity algorithm")
+	}
+	cb, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var c IdentityClaims
+	if err := json.Unmarshal(cb, &c); err != nil {
+		return nil, err
+	}
+	if c.Audience != audience {
+		return nil, fmt.Errorf("identity is for %s, not %s", c.Audience, audience)
+	}
+	if now.Unix() >= c.Expires {
+		return nil, errors.New("identity expired")
+	}
+	return &c, nil
+}
+
+// IdentityToken signs an X-Berth-Identity token, as the sign-in check does
+// (exported for tests).
+func IdentityToken(key ed25519.PrivateKey, issuer, audience string, id Identity, now time.Time) string {
+	return identityJWT(key, issuer, audience, id, now)
 }

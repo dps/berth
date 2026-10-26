@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Berth admin</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/theme.js"></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/"><img class="logo" src="/icon.svg" alt="" width="30" height="30"><span>Berth</span><span class="domain" id="domain"></span></a>
+    <nav class="nav" id="nav">
+      <a href="#/" data-nav="overview">Overview</a>
+      <a href="#/events" data-nav="events">Events</a>
+      <a href="#/ai" data-nav="ai" id="nav-ai" class="hidden">AI</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="updated"><i class="live-dot" id="live-dot"></i><span id="updated">Loading…</span></div>
+    <button class="iconbtn" id="theme" title="Switch light / dark" aria-label="Switch light or dark theme">◐</button>
+    <div class="viewer">
+      <span class="avatar" id="avatar" aria-hidden="true"></span>
+      <span class="email muted" id="email"></span>
+      <form method="post" action="/_berth/logout"><button class="signout" type="submit">Sign out</button></form>
+    </div>
+  </header>
+  <main id="main" aria-live="polite"></main>
+  <div class="tooltip hidden" id="tooltip" role="tooltip"></div>
+</body>
+</html>

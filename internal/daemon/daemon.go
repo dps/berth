@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/dps/berth/internal/ai"
+	"github.com/dps/berth/internal/analytics"
 	"github.com/dps/berth/internal/auth"
 	"github.com/dps/berth/internal/caddy"
 	"github.com/dps/berth/internal/deploy"
@@ -66,6 +68,9 @@ type Daemon struct {
 	lastTunnelCfg string
 	auth          *auth.Server // sign-in; nil until Run
 	ai            *ai.Gateway  // AI gateway; nil until Run
+	authKey       ed25519.PrivateKey
+	stats         *analytics.Stats // request analytics from access logs; nil until Run
+	statusCache   statusCache
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -196,7 +201,7 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		}
 	}
 	for _, a := range apps {
-		r := caddy.Route{App: a.Name, AccessLog: d.Store.Path("apps", a.Name, "logs", "access.log")}
+		r := caddy.Route{App: a.Name, AccessLog: d.Store.AccessLog(a)}
 		r.PublicHosts, r.LANHosts = hosts(a.Name, a.Private, a.Domains)
 		var tokens map[string]string
 		if a.DevOf != "" {
@@ -237,6 +242,10 @@ func (d *Daemon) Apply(ctx context.Context) error {
 	if d.auth != nil {
 		d.auth.SetSites(sites)
 		authHost = d.signInHost(cfg)
+	}
+	if host := d.adminHost(cfg); host != "" {
+		routes = append(routes, caddy.Route{App: "_admin", PublicHosts: []string{host}, Upstream: cfg.AdminAddr, SignIn: true, Private: true, NoIndex: true})
+		sites[host] = auth.Site{App: "_admin", BaseURL: "https://" + host, Access: &state.Access{Level: state.LevelAllow, Allow: []string{"@" + devOwnersGroup}}}
 	}
 	aiListen, aiSources := d.configureAI(cfg, apps)
 	conf := caddy.Build(caddy.Options{
@@ -368,6 +377,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer aiSrv.Close()
+	d.startAnalytics(d.ctx)
+	adminSrv, err := d.startAdmin(cfg)
+	if err != nil {
+		ln.Close()
+		hookLn.Close()
+		return err
+	}
+	defer adminSrv.Close()
 	slog.Info("berthd started", "version", Version, "home", d.Store.Root, "socket", sock, "webhooks", cfg.WebhookAddr)
 
 	go func() {

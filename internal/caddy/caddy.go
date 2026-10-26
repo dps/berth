@@ -24,6 +24,7 @@ type Route struct {
 	PublicHosts []string // reached through the tunnel (127.0.0.1:80 server)
 	LANHosts    []string // reached on the LAN (:443, internal CA)
 	Service     string   // SRV service name (the app); empty = no running release (503)
+	Upstream    string   // a fixed address instead (berthd's admin page)
 	AuthUser    string
 	AuthHash    string // bcrypt
 	AccessLog   string
@@ -288,6 +289,12 @@ func forwardAuth(o Options) obj {
 
 func appHandlers(r Route, o Options) []any {
 	var hs []any
+	if r.Upstream != "" {
+		return append(hs,
+			obj{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}, "prefer": []string{"zstd", "gzip"}},
+			obj{"handler": "reverse_proxy", "upstreams": []any{obj{"dial": r.Upstream}}, "flush_interval": -1},
+		)
+	}
 	if r.Service == "" {
 		body := r.DownBody
 		if body == "" {

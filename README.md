@@ -1,6 +1,8 @@
-# Berth
+<p align="center"><img src="docs/icon.svg" alt="Berth: a bollard with a rope tied into a B" width="160"></p>
 
-**A Dokku for Mac minis.** Push to GitHub and your app is live at
+<h1 align="center">Berth</h1>
+
+**A dead simple PaaS for Mac minis.** Push to GitHub and your app is live at
 `https://myapp.yourdomain.com` a few seconds later, running in its own
 micro-VM on a Mac in your closet. Postgres is one command away.
 
@@ -40,6 +42,7 @@ berth access myapp signed-in                    # Google sign-in in front of it
 - [Sign in with Google](#sign-in-with-google)
 - [Dev versions for agents](#dev-versions-for-agents)
 - [AI for your apps](#ai-for-your-apps)
+- [The admin page](#the-admin-page)
 - [One-off commands and shells](#one-off-commands-and-shells)
 - [Running a Mac in a closet](#running-a-mac-in-a-closet)
 - [Backups and moving to a new Mac](#backups-and-moving-to-a-new-mac)
@@ -805,6 +808,37 @@ containers on this Mac can reach it. To use another port, set `ai_port` in
 `~/.berth/config.json` and run `berth reload`. To use Ollama on another
 machine, set `ollama_url` in `~/.berth/ai/config.json`.
 
+## The admin page
+
+```bash
+berth admin:enable --owner you@gmail.com
+berth admin                      # opens https://admin.<your domain>
+```
+
+A web page with everything on your Berth, live, for the people in the
+`@owners` [sign-in](#sign-in-with-google) group:
+
+- **Overview:** is everything up (containers, proxy, tunnel, disk, memory,
+  AI), warnings, traffic and p50 and p95 latency across all apps for the last 24 hours, every app
+  with its release, requests, errors, latency, visitors and memory, your
+  databases, and recent deploys and crashes.
+- **Each app:** requests, visitors, error rate, latency (p50, p95, p99),
+  data served and bot share for the last hour, day or week, compared with
+  the period before; charts of requests and latency; top pages, referrers,
+  countries and browsers; requests as they arrive; releases; the app's
+  output; how it's set up.
+- **Events** and **AI** (models, aliases, each app's token use).
+
+The numbers come from the request logs Berth already writes for each app.
+Nothing is added to your apps' pages (no script, no cookie), and nothing about
+your visitors leaves the Mac. A "visitor" is a distinct browser (IP address
+plus browser), and crawlers, scripts and uptime checkers are counted
+separately. Countries need the Cloudflare tunnel. Berth keeps 7 days.
+
+The page is read-only: deploys, rollbacks and config changes stay in the
+terminal. Config values are never shown, only their names. To serve it
+elsewhere, use `--host dash.example.com`; to turn it off, `berth admin:disable`.
+
 ## One-off commands and shells
 
 ```bash
@@ -946,6 +980,8 @@ berth uninstall --purge      # also delete every app, webhook, database volume, 
 | `berth dev:token <app> [--as email] [--revoke]` · `dev:db:copy` · `dev:reset` · `dev:agents` · `dev:off` · `dev:on` | dev versions |
 | `berth access <app> [path] [public \| signed-in \| allow who... \| off] [--remove]` | Google sign-in policy |
 | `berth auth:setup google [--host h]` · `auth:status` · `auth:group <name> [who...]` · `auth:sessions` · `auth:revoke <email>` | sign-in setup, groups, sessions |
+| **Admin page** | |
+| `berth admin` · `admin:enable [--host h] [--owner email]` · `admin:disable` | the web admin page for `@owners` |
 | **AI** | |
 | `berth ai:setup [--model m] [--cloud-only]` | install Ollama, download a local model, start the gateway |
 | `berth ai:key <provider> [key] [--url u] [--remove]` | add a cloud provider's key (or any OpenAI-compatible URL) |
@@ -1058,7 +1094,7 @@ All state is plain files you can read:
   apps/<app>/app.json      repo, branch, mounts, links, domains
   apps/<app>/env           live config (mode 0600)
   apps/<app>/releases/     one JSON file per release
-  apps/<app>/logs/         app.log, build-<n>.log, access.log
+  apps/<app>/logs/         app.log, build-<n>.log, release-<n>.log, access.<created>.log
   services/<kind>/<name>/  database settings
   backups/                 database dumps
   data/apps/<app>/         storage:mount folders
@@ -1088,6 +1124,14 @@ rm $BERTH_HOME/caddy.json && bin/berth init --no-tunnel --no-launchd --yes --ski
 # and in two terminals:
 caddy run --config $BERTH_HOME/caddy.json
 bin/berthd --debug
+```
+
+The admin page is plain files in `internal/admin/ui`. To look at it against
+the real Berth without signing in, run a loopback-only preview that signs
+requests as a test viewer, then open http://127.0.0.1:7799:
+
+```bash
+BERTH_ADMIN_PREVIEW=7799 BERTH_ADMIN_PREVIEW_SECS=600 go test ./internal/daemon -run TestAdminPreview
 ```
 
 ## License

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/dps/berth/internal/state"
 )
 
 func cmdLogs() *cobra.Command {
@@ -86,7 +88,11 @@ func cmdLogs() *cobra.Command {
 					}
 					srcs = append(srcs, src{"", p})
 				case access:
-					srcs = append(srcs, src{"", s.Path("apps", app, "logs", "access.log")})
+					logs := s.AccessLogs(app)
+					if len(logs) == 0 {
+						return fmt.Errorf("%s has no requests logged yet", app)
+					}
+					srcs = append(srcs, src{"", logs[len(logs)-1]})
 				default:
 					srcs = append(srcs, src{"", s.Path("apps", app, "logs", "app.log")})
 				}
@@ -210,41 +216,7 @@ func formatAccess(line string, cutoff time.Time) (string, bool) {
 }
 
 // tailLines returns the last n lines of a file.
-func tailLines(path string, n int) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	size := fi.Size()
-	var buf []byte
-	const block = 64 * 1024
-	off := size
-	for off > 0 && strings.Count(string(buf), "\n") <= n {
-		step := min(int64(block), off)
-		off -= step
-		chunk := make([]byte, step)
-		if _, err := f.ReadAt(chunk, off); err != nil && err != io.EOF {
-			return nil, err
-		}
-		buf = append(chunk, buf...)
-	}
-	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
-	if off > 0 && len(lines) > 0 {
-		lines = lines[1:] // partial first line
-	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
-	}
-	return lines, nil
-}
+func tailLines(path string, n int) ([]string, error) { return state.TailLines(path, n) }
 
 // followFile prints lines appended to path, surviving rotation.
 func followFile(ctx context.Context, path string, emit func(string)) {

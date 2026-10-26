@@ -1,5 +1,5 @@
 class Berth < Formula
-  desc "Dokku for Mac minis: git push and your app is live"
+  desc "Dead simple PaaS for Mac minis: git push and your app is live"
   homepage "https://github.com/dps/berth"
   url "https://github.com/dps/berth/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "REPLACE_WITH_RELEASE_TARBALL_SHA256"

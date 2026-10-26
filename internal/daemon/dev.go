@@ -372,8 +372,10 @@ func (d *Daemon) sleepIdleDev(ctx context.Context) {
 		if last.IsZero() {
 			last = rel.CreatedAt
 		}
-		if fi, err := os.Stat(d.Store.Path("apps", a.Name, "logs", "access.log")); err == nil && fi.ModTime().After(last) {
-			last = fi.ModTime()
+		if logs := d.Store.AccessLogs(a.Name); len(logs) > 0 {
+			if fi, err := os.Stat(logs[len(logs)-1]); err == nil && fi.ModTime().After(last) {
+				last = fi.ModTime()
+			}
 		}
 		if time.Since(last) < idle {
 			continue

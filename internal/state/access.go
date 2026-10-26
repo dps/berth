@@ -154,6 +154,9 @@ type AuthConfig struct {
 	ClientID string              `json:"client_id,omitempty"`
 	Host     string              `json:"host,omitempty"` // auth.<domain>
 	Groups   map[string][]string `json:"groups,omitempty"`
+	// AdminHost serves Berth's admin page to the @owners group
+	// (admin.<domain>); empty means off.
+	AdminHost string `json:"admin_host,omitempty"`
 }
 
 func (s *Store) AuthConfig() (*AuthConfig, error) {
