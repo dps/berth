@@ -78,3 +78,19 @@ func TestCreateAndLink(t *testing.T) {
 		t.Fatalf("second link var %s", v)
 	}
 }
+
+func TestMemoryBytes(t *testing.T) {
+	for in, want := range map[string]int64{"256M": 256 << 20, "1G": 1 << 30, "512mb": 512 << 20, "1.5G": 3 << 29} {
+		if got, ok := memoryBytes(in); !ok || got != want {
+			t.Errorf("%s: %d %v", in, got, ok)
+		}
+	}
+	for _, bad := range []string{"", "lots", "-1M", "0"} {
+		if _, ok := memoryBytes(bad); ok {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if b, _ := memoryBytes("128M"); b >= MinMemory {
+		t.Error("128M should be below the minimum")
+	}
+}

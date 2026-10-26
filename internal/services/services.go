@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +128,11 @@ func (m *Manager) Create(ctx context.Context, kind, name, image, memory string, 
 	if memory == "" {
 		memory = k.Memory
 	}
+	if b, ok := memoryBytes(memory); !ok {
+		return nil, fmt.Errorf("--memory %q: write it like 256M or 1G", memory)
+	} else if b < MinMemory {
+		return nil, fmt.Errorf("--memory %s is below the 200 MB Apple's container needs", memory)
+	}
 	port, err := m.allocatePort(cfg)
 	if err != nil {
 		return nil, err
@@ -143,13 +149,39 @@ func (m *Manager) Create(ctx context.Context, kind, name, image, memory string, 
 		return nil, err
 	}
 	if err := m.run(ctx, sv, cfg); err != nil {
-		return sv, err
+		// Leave nothing half-made behind: a retry starts clean.
+		m.Store.DeleteService(kind, name)
+		m.RT.VolumeRemove(context.Background(), sv.Volume)
+		return nil, err
 	}
 	fmt.Fprintf(out, "-----> Waiting for %s:%s to accept connections\n", kind, name)
 	if err := m.WaitReady(ctx, sv, 90*time.Second); err != nil {
 		return sv, err
 	}
 	return sv, nil
+}
+
+// MinMemory is the least memory Apple's container gives a container.
+const MinMemory = 200 << 20
+
+// memoryBytes reads 256M, 1G, 512MB and the like.
+func memoryBytes(s string) (int64, bool) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	mult := int64(1)
+	for _, u := range []struct {
+		suffix string
+		mult   int64
+	}{{"GB", 1 << 30}, {"MB", 1 << 20}, {"KB", 1 << 10}, {"G", 1 << 30}, {"M", 1 << 20}, {"K", 1 << 10}} {
+		if strings.HasSuffix(s, u.suffix) {
+			s, mult = strings.TrimSuffix(s, u.suffix), u.mult
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return int64(n * float64(mult)), true
 }
 
 func (m *Manager) allocatePort(cfg *state.Config) (int, error) {

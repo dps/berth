@@ -37,7 +37,7 @@ func (d *Daemon) ensureDev(ctx context.Context, parent *state.App, out io.Writer
 
 // ensureChild returns parent's dev version (pr 0) or the preview of pull
 // request pr, creating it with its own data on first use.
-func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out io.Writer) (*state.App, error) {
+func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out io.Writer) (_ *state.App, err error) {
 	kind, name, branch := "dev version", state.DevName(parent.Name), devRef
 	if pr > 0 {
 		kind, name, branch = "preview", state.PreviewName(parent.Name, pr), previewRef(pr)
@@ -94,6 +94,14 @@ func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out
 	if err := d.Store.SaveApp(dev); err != nil {
 		return nil, err
 	}
+	// Half-made, it would be reused as it is by the next push: undo it so
+	// the next one starts over.
+	defer func() {
+		if err != nil {
+			d.destroyApp(context.Background(), dev, false, io.Discard)
+			fmt.Fprintf(out, "       removed the half-made %s; the next push tries again\n", name)
+		}
+	}()
 	fmt.Fprintf(out, "-----> Creating %s, the %s of %s (its own data; config copied from %s)\n", name, kind, parent.Name, parent.Name)
 	for _, l := range links {
 		switch l.kind {
@@ -119,7 +127,8 @@ func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out
 				svName = state.PreviewName(l.name, pr)
 			}
 			if _, err := d.Store.Service("redis", svName); err != nil {
-				if _, err := d.Services.Create(ctx, "redis", svName, "", "128M", out); err != nil {
+				// Apple's container gives each container at least 200 MB.
+				if _, err := d.Services.Create(ctx, "redis", svName, "", "256M", out); err != nil {
 					return nil, fmt.Errorf("dev Redis: %w", err)
 				}
 			}
