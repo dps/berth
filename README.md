@@ -609,7 +609,7 @@ Every app with a policy also has:
 | Path | What |
 | --- | --- |
 | `/_berth/login?return=/somewhere` | sign in, then come back |
-| `/_berth/logout` | sign out of every app (POST it from a form; GET shows a button) |
+| `/_berth/logout?return=/path` | sign out of every app (POST it from a form; GET shows a button), then go back to the path, or to a "Signed out" page if that path needs sign-in |
 | `/_berth/me` | who is signed in, as JSON, for single-page apps |
 
 Signing in to one app makes the next one a quick redirect with no Google

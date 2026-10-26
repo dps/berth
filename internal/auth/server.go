@@ -155,7 +155,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/_berth/callback":
 		s.appCallback(w, r, host)
 	case "/_berth/logout":
-		s.logout(w, r, host, safeReturn(r.URL.Query().Get("return")))
+		ret := safeReturn(r.URL.Query().Get("return"))
+		// Going back to a page that needs sign-in would sign the person
+		// straight back in: the provider remembers them and skips its
+		// prompt. Stop on a signed-out page instead.
+		if p, ok := cleanPath(ret); ok && site.Access != nil && site.Access.For(p).Level != state.LevelPublic {
+			ret = "/_berth/signed-out?return=" + url.QueryEscape(ret)
+		}
+		s.logout(w, r, host, ret)
+	case "/_berth/signed-out":
+		page(w, 200, "Signed out", `<p>You've signed out of every app on this Berth.</p>
+<p><a class="btn" href="{{.}}">Sign in again</a></p>`, safeReturn(r.URL.Query().Get("return")))
 	case "/_berth/me":
 		s.me(w, r, host)
 	case "/_berth/jwks.json":

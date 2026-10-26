@@ -323,6 +323,16 @@ func TestLogoutNeedsSameOriginAndEndsEverySession(t *testing.T) {
 	if w := b.do("POST", "https://chirp.example.com/_berth/logout", map[string]string{"Origin": "https://chirp.example.com"}); w.Code != http.StatusSeeOther {
 		t.Fatalf("logout: %d", w.Code)
 	}
+	// From a page that needs sign-in, sign-out stops on a signed-out page:
+	// going back would sign straight in again through the provider.
+	b.signIn("vault.example.com", "/")
+	w := b.do("POST", "https://vault.example.com/_berth/logout?return=/docs", map[string]string{"Origin": "https://vault.example.com"})
+	if loc := w.Header().Get("Location"); w.Code != http.StatusSeeOther || loc != "/_berth/signed-out?return=%2Fdocs" {
+		t.Fatalf("logout from a private page: %d %q", w.Code, loc)
+	}
+	if w := b.do("GET", "https://vault.example.com"+w.Header().Get("Location"), nil); w.Code != 200 || !strings.Contains(w.Body.String(), `href="/docs"`) {
+		t.Fatalf("signed-out page: %d %s", w.Code, w.Body.String())
+	}
 	if w := b.check("vault.example.com", "/"); w.Code != http.StatusFound {
 		t.Fatalf("vault still signed in after logout: %d", w.Code)
 	}
