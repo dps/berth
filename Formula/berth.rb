@@ -1,8 +1,8 @@
 class Berth < Formula
   desc "Dead simple PaaS for Mac minis: git push and your app is live"
   homepage "https://github.com/dps/berth"
-  url "https://github.com/dps/berth/archive/refs/tags/v0.1.2.tar.gz"
-  sha256 "1118f64daef80efb566d19d00b1140bfeb365cf89e51934baf31dc31e210ab79"
+  url "https://github.com/dps/berth/archive/refs/tags/v0.1.3.tar.gz"
+  sha256 "eb7a4d8b8bfe9db9b223bf54af7912f90f83a0346775348945f2bf4333e70c34"
   license "MIT"
   head "https://github.com/dps/berth.git", branch: "main"
 
