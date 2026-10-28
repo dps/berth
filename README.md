@@ -623,9 +623,10 @@ deploy rather than quietly never running.
 
 Each run is a fresh container from the current release, with the app's
 config and storage. If a job is still running when its next turn comes round,
-that turn is skipped. A failed run is an event (and a notification), and
-`BERTH_CRON_TIMEOUT` (an hour by default) stops runaways. Runs missed while
-the Mac was off don't get made up.
+that turn is skipped. When a job starts failing you get one notification,
+and another when it works again, not one per run (a job that runs every
+minute would otherwise send sixty an hour). `BERTH_CRON_TIMEOUT` (an hour by
+default) stops runaways. Runs missed while the Mac was off don't get made up.
 
 ```bash
 berth cron myapp                   # the jobs, when they next run and how the last run went

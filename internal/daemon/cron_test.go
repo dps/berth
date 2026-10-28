@@ -112,6 +112,25 @@ func TestWorkersAndCronOnTheDaemon(t *testing.T) {
 	if _, err := d.hCronRun(d.ctx, rp, &out); err != nil || !strings.Contains(out.String(), "ran node digest.js") {
 		t.Fatalf("cron:run: %v\n%s", err, out.String())
 	}
+	// A job that keeps failing notifies once, and again when it recovers.
+	fp, _ := json.Marshal(CronParams{App: "web", Index: 2})
+	for i := 0; i < 2; i++ {
+		if _, err := d.hCronRun(d.ctx, fp, io.Discard); err == nil {
+			t.Fatal("fail.js succeeded")
+		}
+	}
+	rt.RunWithHook = func(o runtime.RunOpts, stdout io.Writer) error { return nil }
+	if _, err := d.hCronRun(d.ctx, fp, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	evlog, _ := os.ReadFile(d.Store.EventsPath())
+	if n := strings.Count(string(evlog), `"kind":"cron.failed"`); n != 1 {
+		t.Fatalf("%d cron.failed events for 3 failures in a row:\n%s", n, evlog)
+	}
+	if !strings.Contains(string(evlog), "succeeded again after 3 failed runs") {
+		t.Fatalf("no recovery event:\n%s", evlog)
+	}
+
 	rp, _ = json.Marshal(CronParams{App: "web", Index: 3})
 	if _, err := d.hCronRun(d.ctx, rp, &out); err == nil {
 		t.Fatal("ran job 3 of 2")

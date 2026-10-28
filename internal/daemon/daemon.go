@@ -168,7 +168,7 @@ func (d *Daemon) event(ev state.Event) {
 	}
 	slog.Info(ev.Message, "kind", ev.Kind, "app", ev.App)
 	switch ev.Kind {
-	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed", "network", "cron.failed", "offsite.failed":
+	case "deploy.ok", "deploy.failed", "crash.loop", "backup.failed", "network", "cron.failed", "cron.ok", "offsite.failed":
 		go d.notify(ev)
 	}
 }

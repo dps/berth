@@ -71,6 +71,8 @@ type CronRun struct {
 	Secs    float64   `json:"secs"`
 	Trigger string    `json:"trigger"`
 	Error   string    `json:"error,omitempty"`
+	// Failures counts the failed runs in a row, this one included.
+	Failures int `json:"failures,omitempty"`
 }
 
 var cronStateMu sync.Mutex
@@ -133,15 +135,28 @@ func (d *Daemon) runCron(ctx context.Context, app string, rel *state.Release, id
 	prev := d.cronState(app)[job.Command]
 	if err != nil {
 		run.Error = err.Error()
+		run.Failures = 1
+		if prev.Error != "" {
+			run.Failures = max(prev.Failures, 1) + 1
+		}
 	}
 	d.saveCronRun(app, job.Command, run)
+	// Only the first failure in a row is an event (and a notification), so
+	// a job that runs every minute against a sensor that's gone away
+	// doesn't send sixty an hour; the rest are in cron.log and berth cron.
 	if err != nil {
 		fmt.Fprintf(pw, "-----> failed after %.1fs: %v\n", secs, err)
-		d.event(state.Event{Kind: "cron.failed", App: app, Message: fmt.Sprintf("cron %d (`%s`) failed after %.0fs: %v (berth logs %s --cron)", idx, job.Command, secs, err, app)})
+		if run.Failures == 1 {
+			d.event(state.Event{Kind: "cron.failed", App: app, Message: fmt.Sprintf("cron %d (`%s`) failed after %.0fs: %v (berth logs %s --cron; you'll hear again when it succeeds)", idx, job.Command, secs, err, app)})
+		}
 	} else {
 		fmt.Fprintf(pw, "-----> finished in %.1fs\n", secs)
 		if prev.Error != "" {
-			d.event(state.Event{Kind: "cron", App: app, Message: fmt.Sprintf("cron %d (`%s`) succeeded again", idx, job.Command)})
+			runs := "1 failed run"
+			if n := max(prev.Failures, 1); n > 1 {
+				runs = fmt.Sprintf("%d failed runs", n)
+			}
+			d.event(state.Event{Kind: "cron.ok", App: app, Message: fmt.Sprintf("cron %d (`%s`) succeeded again after %s", idx, job.Command, runs)})
 		}
 	}
 	pw.Flush()
