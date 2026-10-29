@@ -143,7 +143,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.88em; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
   gap: 48px;
   align-items: center;
-  padding: 88px 0 72px;
+  padding: 56px 0 72px;
 }
 .eyebrow {
   margin: 0 0 16px;
@@ -514,4 +514,27 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 @media (prefers-color-scheme: dark) {
   .flow .node.mac { background: var(--rope); color: var(--navy); border-color: var(--rope); }
   .here { background: var(--surface-2); }
+}
+
+/* The Mac mini (Apple_Mac_Mini_M4.svg by LoMit on Wikimedia Commons, CC0),
+   with the deploy terminal sitting in front of it. */
+.hero-art { position: relative; }
+.hero-art .mini { display: block; width: 86%; height: auto; margin: 0 0 0 auto; }
+.hero-art .terminal { position: relative; width: 94%; margin-top: -22%; }
+
+/* "You're looking at a Berth app", at the top of the landing page. */
+.here.top-here { margin: 24px 0 0; padding: 20px 26px; gap: 20px; border-radius: 14px; }
+.here.top-here img { width: 52px; height: 52px; border-radius: 12px; }
+.here.top-here h2 { margin: 0 0 4px; font-size: 21px; }
+.here.top-here p { font-size: 15.5px; }
+
+@media (max-width: 860px) {
+  .hero-art .mini { width: 78%; margin: 0 auto; }
+  .hero-art .terminal { width: 100%; margin-top: -14%; }
+}
+@media (max-width: 560px) {
+  .here.top-here { grid-template-columns: auto minmax(0, 1fr); padding: 16px 18px; gap: 14px; }
+  .here.top-here img { width: 40px; height: 40px; border-radius: 10px; }
+  .here.top-here h2 { font-size: 18px; }
+  .here.top-here p { font-size: 14.5px; }
 }

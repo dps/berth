@@ -24,6 +24,15 @@
 
 <main>
   <div class="wrap">
+    <section class="here top-here">
+      <img src="/assets/icon.svg" alt="">
+      <div>
+        <h2>You're looking at a Berth app</h2>
+        <p>This site is served from a Mac mini in my closet, through a Cloudflare tunnel. Its docs are the <a href="https://github.com/dps/berth#readme">README</a>, and a push to the repo redeploys them. If it's down, now you know why.</p>
+      </div>
+    </section>
+  </div>
+  <div class="wrap">
     <section class="hero">
       <div>
         <p class="eyebrow">Open source hosting for vibe coded apps</p>
@@ -34,6 +43,8 @@
           <a class="button secondary" href="#with-your-agent">See how it works with an agent</a>
         </div>
       </div>
+      <div class="hero-art">
+        <img class="mini" src="/assets/mac-mini.svg" alt="A Mac mini" width="693" height="420">
       <div class="terminal" role="img" aria-label="A terminal showing berth deploy building and releasing an app in a few seconds">
         <div class="bar"><i></i><i></i><i></i></div>
 <pre class="no-copy"><span class="p">~/myapp $</span> berth deploy myapp
@@ -46,6 +57,7 @@
 <span class="d">-----></span> v12 is live; v11 drains for 5s, then stops
 <span class="d">=====></span> myapp v12 (896a731) is live at
        <span class="u">https://myapp.example.com</span></pre>
+      </div>
       </div>
     </section>
   </div>
@@ -185,15 +197,6 @@ git push                             <span class="c"># every deploy after that</
     </div>
   </section>
 
-  <div class="wrap">
-    <section class="here">
-      <img src="/assets/icon.svg" alt="">
-      <div>
-        <h2>You're looking at a Berth app</h2>
-        <p>This site is served from a Mac mini in a closet, through a Cloudflare tunnel. Its docs are the <a href="https://github.com/dps/berth#readme">README</a>, and a push to the repo redeploys them. If it's down, now you know why.</p>
-      </div>
-    </section>
-  </div>
 </main>
 
 <footer class="site-foot">
