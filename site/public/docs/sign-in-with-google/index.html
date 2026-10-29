@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in with Google · Berth docs</title>
+<meta name="description" content="I got tired of writing the same OAuth code for every little app, so Berth does it once.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/" aria-current="page">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="sign-in-with-google">Sign in with Google</h1>
+      <p>I got tired of writing the same OAuth code for every little app, so Berth
+does it once. It puts Google sign-in in front of any app and tells the app
+who's signed in with request headers.</p>
+<h2 id="set-it-up-once">Set it up once</h2>
+<pre><code class="language-bash">berth auth:setup google
+</code></pre>
+<p>Google doesn't let programs create OAuth clients, so this walks you through
+about a minute in the Google Cloud console: create a &quot;Web application&quot; client
+with the redirect URI it prints (<code>https://auth.&lt;your domain&gt;/callback</code>),
+publish the consent screen, and paste in the client ID and secret. Every app
+shares that one client. Then open <code>https://auth.&lt;your domain&gt;</code> and sign in to
+check it works.</p>
+<p>If <code>auth.&lt;your domain&gt;</code> is already taken, pick another name:
+<code>berth auth:setup google --host signin.&lt;your domain&gt;</code>. Berth won't take over a
+name that already has its own DNS record.</p>
+<h2 id="choose-who-gets-in">Choose who gets in</h2>
+<pre><code class="language-bash">berth access myapp public                      # anyone; the app still learns who's signed in
+berth access myapp signed-in                   # any Google account
+berth access myapp allow you@gmail.com @family @example.com
+berth access myapp /admin/* allow you@gmail.com   # a rule for some paths (* is a prefix)
+berth access myapp /admin/* --remove
+berth access myapp                             # show the policy
+berth access myapp off                         # no sign-in at all
+</code></pre>
+<p><code>allow</code> takes email addresses, Google Workspace domains (<code>@example.com</code>) and
+groups. It won't take <code>@gmail.com</code>: Google doesn't vouch for a domain on
+personal accounts, so it would match nobody. Use <code>signed-in</code> for &quot;any Google
+account&quot;. Make a group once and use it anywhere:</p>
+<pre><code class="language-bash">berth auth:group family alice@gmail.com bob@gmail.com
+</code></pre>
+<p>Changes to allow lists and groups apply on the visitor's next request. Anyone
+not signed in gets sent to Google first (API calls get a 401 instead), and
+anyone signed in without access sees a &quot;No access&quot; page with a button to
+switch accounts.</p>
+<h2 id="in-your-app">In your app</h2>
+<p>Requests arrive with these headers. Berth strips any <code>X-Berth-*</code> headers a
+visitor sends, so you can trust them.</p>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>X-Berth-User-Id</code></td>
+<td><code>google:&lt;id&gt;</code>, stable for the life of the account: key your users table on this</td>
+</tr>
+<tr>
+<td><code>X-Berth-Email</code></td>
+<td><code>you@gmail.com</code></td>
+</tr>
+<tr>
+<td><code>X-Berth-Name</code></td>
+<td>display name, URL-encoded (<code>decodeURIComponent</code> it)</td>
+</tr>
+<tr>
+<td><code>X-Berth-Picture</code></td>
+<td>avatar URL</td>
+</tr>
+<tr>
+<td><code>X-Berth-Identity</code></td>
+<td>all of the above as a 5-minute signed JWT (EdDSA), if you'd like to verify; the key is at <code>/_berth/jwks.json</code></td>
+</tr>
+</tbody>
+</table>
+<p>On a <code>public</code> app the headers are missing for anonymous visitors. That's the
+pattern for a site anyone can read but only signed-in people can post to:
+check for the header on your write endpoints, and return 401 if it's not
+there.</p>
+<p>Apps with a policy also get these paths. On an app with no policy they answer
+404, with a note saying <code>berth access myapp public</code> turns them on (and keeps
+the app open to everyone):</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/_berth/login?return=/somewhere</code></td>
+<td>sign in, then come back</td>
+</tr>
+<tr>
+<td><code>/_berth/logout?return=/path</code></td>
+<td>sign out of every app (POST it from a form; a GET shows a button), then go back to the path, or to a &quot;Signed out&quot; page if that path needs sign-in</td>
+</tr>
+<tr>
+<td><code>/_berth/me</code></td>
+<td>who's signed in, as JSON, for single-page apps</td>
+</tr>
+</tbody>
+</table>
+<p>Once you've signed in to one app, the next is a quick redirect with no Google
+prompt. Sessions last 30 days and renew as long as they're used.
+<code>berth auth:sessions</code> lists them, <code>berth auth:revoke &lt;email&gt;</code> signs someone out
+everywhere, and <code>berth auth:status</code> shows the setup, groups and every app's
+policy. <a href="https://github.com/dps/berth_chirp_node">Chirp</a> is a complete example.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/domains-lan-urls-and-passwords/"><span>Previous</span>Domains, LAN URLs and passwords</a><a class="next" href="/docs/dev-versions/"><span>Next</span>Dev versions</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#set-it-up-once">Set it up once</a></li>
+      <li><a href="#choose-who-gets-in">Choose who gets in</a></li>
+      <li><a href="#in-your-app">In your app</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config · Berth docs</title>
+<meta name="description" content="Config is environment variables.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/" aria-current="page">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="config">Config</h1>
+      <p>Config is environment variables. Changing them makes a new release from the
+current image (no rebuild), so it's live in a few seconds.</p>
+<pre><code class="language-bash">berth config:set myapp OPENAI_API_KEY=sk-… GREETING=hello
+berth config:unset myapp GREETING
+berth config:get myapp OPENAI_API_KEY
+berth config:show myapp                 # secrets masked; --reveal to show them, --shell for KEY=value
+berth config:import myapp .env          # add a .env file; --replace drops everything else
+berth config:set myapp FOO=bar --no-restart     # save it now, use it on the next deploy
+</code></pre>
+<p><code>config:show</code> hides anything ending in <code>_KEY</code>, <code>_SECRET</code>, <code>_TOKEN</code> or
+<code>PASSWORD</code>, plus <code>DATABASE_URL</code> and <code>REDIS_URL</code>.</p>
+<p>Your app gets its variables when it runs, not when it builds. If the build
+really does need one (a public API URL baked into a frontend, say), mark it:</p>
+<pre><code class="language-bash">berth config:set myapp NEXT_PUBLIC_API_URL=https://api.example.com --build-arg
+</code></pre>
+<h2 id="settings-for-berth-itself">Settings for Berth itself</h2>
+<p>Variables starting with <code>BERTH_</code> tune how Berth runs the app. Your app never
+sees them.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BERTH_HEALTHCHECK</code></td>
+<td><code>/</code></td>
+<td>the path checked before traffic moves to a new release</td>
+</tr>
+<tr>
+<td><code>BERTH_HEALTH_TIMEOUT</code></td>
+<td><code>60</code></td>
+<td>seconds to wait for it to get healthy</td>
+</tr>
+<tr>
+<td><code>BERTH_DRAIN</code></td>
+<td><code>5</code></td>
+<td>seconds the old release keeps running after the switch</td>
+</tr>
+<tr>
+<td><code>BERTH_MEMORY</code></td>
+<td><code>512M</code></td>
+<td>memory limit (<code>256M</code>, <code>1G</code>, …)</td>
+</tr>
+<tr>
+<td><code>BERTH_CPUS</code></td>
+<td><code>1</code></td>
+<td>CPU limit</td>
+</tr>
+<tr>
+<td><code>BERTH_KEEP_RELEASES</code></td>
+<td><code>5</code></td>
+<td>release images kept for rollback</td>
+</tr>
+<tr>
+<td><code>BERTH_DOCKERFILE</code></td>
+<td>—</td>
+<td>Dockerfile path in the repo (or the <code>--path</code> subfolder)</td>
+</tr>
+<tr>
+<td><code>BERTH_RELEASE_COMMAND</code></td>
+<td>Procfile <code>release:</code></td>
+<td>command run before each release, usually migrations (<a href="/docs/migrations/">more</a>)</td>
+</tr>
+<tr>
+<td><code>BERTH_RELEASE_TIMEOUT</code></td>
+<td><code>600</code></td>
+<td>seconds the release command gets</td>
+</tr>
+<tr>
+<td><code>BERTH_RELEASE_BACKUP</code></td>
+<td><code>on</code></td>
+<td><code>off</code> skips the Postgres backup before the release command</td>
+</tr>
+<tr>
+<td><code>BERTH_CRON_TIMEOUT</code></td>
+<td><code>3600</code></td>
+<td>seconds a <a href="/docs/workers-and-scheduled-jobs/#scheduled-jobs">scheduled job</a> gets</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td><code>8080</code></td>
+<td>the port your app listens on inside its container</td>
+</tr>
+</tbody>
+</table>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/releases-and-rollbacks/"><span>Previous</span>Releases and rollbacks</a><a class="next" href="/docs/logs-and-status/"><span>Next</span>Logs and status</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

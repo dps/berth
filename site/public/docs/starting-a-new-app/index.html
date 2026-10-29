@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Starting a new app · Berth docs</title>
+<meta name="description" content="-y says yes to both, and --no-github and --no-deploy skip them.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/" aria-current="page">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="starting-a-new-app">Starting a new app</h1>
+      <pre><code class="language-bash">berth new myapp                    # or --stack python | go | static
+</code></pre>
+<p>You get a folder called <code>myapp</code> that's ready to hand to a coding agent:</p>
+<ul>
+<li><strong>A small web app</strong> that already follows <a href="/docs/deploying-an-app/#what-your-app-must-do">the rules</a>:
+Node with no dependencies (the default), Python with FastAPI, Go with the
+standard library, or a static site.</li>
+<li><strong><code>AGENTS.md</code></strong>, which Codex, Cursor and most other agents read. It tells
+the agent how to try changes on the <a href="/docs/dev-versions/">dev version</a> with
+<code>berth dev:push</code>, read logs, set config, add a database, write migrations,
+add workers and cron jobs, use <a href="/docs/sign-in-with-google/">sign-in</a> and
+<a href="/docs/ai-for-your-apps/">AI</a> if your Berth has them, and which things to ask you
+about first (pushing to <code>main</code>, rollbacks, production config). It has your
+app's real URLs in it. It's yours: edit away.</li>
+<li><strong><code>CLAUDE.md</code></strong>, one line pointing Claude Code at <code>AGENTS.md</code>.</li>
+<li>A README, a <code>.gitignore</code> and a first commit on <code>main</code>.</li>
+</ul>
+<p>Then it asks about two more things:</p>
+<ol>
+<li><strong>GitHub.</strong> If the <a href="https://cli.github.com">GitHub CLI</a> is logged in
+(<code>brew install gh &amp;&amp; gh auth login</code>), Berth makes a private repo,
+<code>&lt;you&gt;/myapp</code>, and pushes to it. <code>--public</code> makes it public; <code>--repo</code> picks
+another name or an organization. Without <code>gh</code>, it prints the three steps to
+do by hand.</li>
+<li><strong>Deploying.</strong> It creates the app from that repo and deploys it, just like
+<a href="/docs/deploying-an-app/"><code>berth create</code></a>.</li>
+</ol>
+<p><code>-y</code> says yes to both, and <code>--no-github</code> and <code>--no-deploy</code> skip them. Then
+open the folder in your agent and ask for what you want.</p>
+<p><code>berth new</code> works on your laptop too, which is probably where your editor and
+agent live: see <a href="/docs/working-from-your-laptop/">Working from your laptop</a>. For an
+existing repo, <code>berth dev:agents myapp</code> prints the Berth section of
+<code>AGENTS.md</code> for you to paste in.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/setting-up/"><span>Previous</span>Setting up</a><a class="next" href="/docs/deploying-an-app/"><span>Next</span>Deploying an app</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

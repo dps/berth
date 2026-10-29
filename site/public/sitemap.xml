@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://berth.computer/</loc></url>
+  <url><loc>https://berth.computer/docs/</loc></url>
+  <url><loc>https://berth.computer/docs/what-you-need/</loc></url>
+  <url><loc>https://berth.computer/docs/setting-up/</loc></url>
+  <url><loc>https://berth.computer/docs/starting-a-new-app/</loc></url>
+  <url><loc>https://berth.computer/docs/deploying-an-app/</loc></url>
+  <url><loc>https://berth.computer/docs/releases-and-rollbacks/</loc></url>
+  <url><loc>https://berth.computer/docs/config/</loc></url>
+  <url><loc>https://berth.computer/docs/logs-and-status/</loc></url>
+  <url><loc>https://berth.computer/docs/one-off-commands/</loc></url>
+  <url><loc>https://berth.computer/docs/postgres-and-redis/</loc></url>
+  <url><loc>https://berth.computer/docs/sqlite/</loc></url>
+  <url><loc>https://berth.computer/docs/migrations/</loc></url>
+  <url><loc>https://berth.computer/docs/workers-and-scheduled-jobs/</loc></url>
+  <url><loc>https://berth.computer/docs/persistent-storage/</loc></url>
+  <url><loc>https://berth.computer/docs/domains-lan-urls-and-passwords/</loc></url>
+  <url><loc>https://berth.computer/docs/sign-in-with-google/</loc></url>
+  <url><loc>https://berth.computer/docs/dev-versions/</loc></url>
+  <url><loc>https://berth.computer/docs/pull-request-previews/</loc></url>
+  <url><loc>https://berth.computer/docs/ai-for-your-apps/</loc></url>
+  <url><loc>https://berth.computer/docs/the-admin-page/</loc></url>
+  <url><loc>https://berth.computer/docs/living-in-a-closet/</loc></url>
+  <url><loc>https://berth.computer/docs/working-from-your-laptop/</loc></url>
+  <url><loc>https://berth.computer/docs/backups-and-moving-to-a-new-mac/</loc></url>
+  <url><loc>https://berth.computer/docs/upgrading/</loc></url>
+  <url><loc>https://berth.computer/docs/commands/</loc></url>
+  <url><loc>https://berth.computer/docs/troubleshooting/</loc></url>
+  <url><loc>https://berth.computer/docs/example-apps/</loc></url>
+  <url><loc>https://berth.computer/docs/how-it-works/</loc></url>
+  <url><loc>https://berth.computer/docs/hacking-on-berth/</loc></url>
+  <url><loc>https://berth.computer/docs/license/</loc></url>
+</urlset>

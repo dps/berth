@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrations · Berth docs</title>
+<meta name="description" content="Any tool works: alembic upgrade head, python manage.py migrate --noinput, bin/rails db:migrate, npx knex migrate:latest, or a script of your own.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/" aria-current="page">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="migrations">Migrations</h1>
+      <p>Tell Berth how your app migrates its database and it'll run that once per
+release, after the build and before the new code sees any traffic. Add a
+<code>Procfile</code> to the repo with a <code>release:</code> line:</p>
+<pre><code>release: npx prisma migrate deploy
+</code></pre>
+<p>Any tool works: <code>alembic upgrade head</code>, <code>python manage.py migrate --noinput</code>,
+<code>bin/rails db:migrate</code>, <code>npx knex migrate:latest</code>, or a script of your own.
+No Procfile? Set it as config instead:
+<code>berth config:set myapp BERTH_RELEASE_COMMAND=&quot;alembic upgrade head&quot;</code>.</p>
+<p>Then on every deploy Berth:</p>
+<ol>
+<li>backs up each Postgres database the app is linked to,</li>
+<li>runs the command in a fresh container from the new image, with the new
+release's config (so <code>DATABASE_URL</code> and friends are there), and streams
+the output,</li>
+<li>starts the new release only if the command worked. If it didn't, the
+deploy stops, the running version carries on serving, and the output
+tells you what broke and where the backup is.</li>
+</ol>
+<pre><code>-----&gt; Backed up pg:chirpdb before the release command (0.2s, 5.1 KB)
+-----&gt; Running release command: node migrate.js
+       applied 004_add_mood (3ms)
+       1 migration(s) applied
+-----&gt; Release command finished in 0.8s
+-----&gt; Starting berth-chirp-5-k2x9 on 127.0.0.1:8002
+</code></pre>
+<p><code>berth logs myapp --release</code> shows the latest run. If your app creates its
+tables when it starts up, move that into the release command. Otherwise a
+half-done migration leaves you with a crashing container and nothing to undo
+it with. Config changes (<code>config:set</code>, <code>pg:link</code>) run the command again too,
+so it has to be safe to repeat. Every migration tool's &quot;apply what's pending&quot;
+command is.</p>
+<p>If Berth spots a migration tool (Prisma, Drizzle, Knex, Alembic, Django,
+Rails) but no release command, the deploy prints the line to add. It won't
+run migrations you didn't ask for.</p>
+<h2 id="write-migrations-the-old-code-can-live-with">Write migrations the old code can live with</h2>
+<p>Because deploys have no downtime, the old release is still serving for a few
+seconds against the migrated database. So every migration has to work with
+both the old code and the new:</p>
+<ul>
+<li><strong>Adding</strong> a column or table is fine. Make new columns nullable or give
+them a default.</li>
+<li><strong>Removing</strong> one takes two releases: stop using it, then drop it later.</li>
+<li><strong>Renaming</strong> is add, copy, switch the code, then drop.</li>
+</ul>
+<h2 id="try-it-on-the-dev-version-first">Try it on the dev version first</h2>
+<p>The <a href="/docs/dev-versions/">dev version</a> runs the release command against its own
+database, so you can try a migration before committing it:</p>
+<pre><code class="language-bash">berth dev:db:copy myapp     # copy production's data into the dev database, then migrate it
+berth dev:push              # build your working tree, run the release command, start it
+</code></pre>
+<p><code>dev:push</code> exits with code 3 if the release command fails, with the error in
+the output (and in <code>--json</code>). This is the loop to give an agent: write the
+migration, <code>dev:push</code>, fix until it exits 0, commit.</p>
+<h2 id="rolling-back-data">Rolling back data</h2>
+<p>Since there's a backup from just before each release command, you can undo a
+migration along with the code:</p>
+<pre><code class="language-bash">berth rollback myapp --with-data
+</code></pre>
+<p>This swaps back to the previous release, then replaces the database with the
+backup taken just before the newer release migrated it. Anything written
+since then is gone, so Berth asks first, and saves the current data to
+<code>~/.berth/backups/pg/&lt;db&gt;/</code> before restoring. Without <code>--with-data</code>, a
+rollback leaves the data alone, which is what you want whenever the migration
+was backward compatible.</p>
+<p>The last 14 pre-release backups per app are kept in
+<code>~/.berth/backups/pg/&lt;db&gt;/releases/&lt;app&gt;/</code>. If a database is too big to dump
+on every deploy, <code>berth config:set myapp BERTH_RELEASE_BACKUP=off</code> skips it
+(and <code>--with-data</code> then has nothing to restore).</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/sqlite/"><span>Previous</span>SQLite</a><a class="next" href="/docs/workers-and-scheduled-jobs/"><span>Next</span>Workers and scheduled jobs</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#write-migrations-the-old-code-can-live-with">Write migrations the old code can live with</a></li>
+      <li><a href="#try-it-on-the-dev-version-first">Try it on the dev version first</a></li>
+      <li><a href="#rolling-back-data">Rolling back data</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

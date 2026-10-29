@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Berth docs</title>
+<meta name="description" content="I wanted the old Heroku feeling (push, and it&#39;s live) for the pile of small apps I and my coding agents keep making, without a monthly bill per app or a week…">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/" aria-current="page">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="why">Why Berth</h1>
+      <p>I wanted the old Heroku feeling (push, and it's live) for the pile of small
+apps I and my coding agents keep making, without a monthly bill per app or a
+weekend lost to Kubernetes. A Mac mini turns out to be a great home for that.
+It's quiet, it sips power, and an M4 with 16 GB comfortably runs twenty-odd
+small apps and a couple of databases. Apple's
+<a href="https://github.com/apple/container"><code>container</code></a> runtime gives each app its
+own lightweight Linux VM, and a Cloudflare tunnel puts it on the internet
+without opening anything at home.</p>
+<p>Berth is the glue. Each piece of it exists because something was annoying
+without it: zero-downtime deploys, nightly database dumps, a dev version an
+agent can push to and test on its own, sign-in so I stop writing OAuth code,
+and an encrypted backup somewhere that isn't the Mac.</p>
+<h2 id="what-it-isnt">What it isn't</h2>
+<p>It's one Mac. There's no failover, and if the power goes out while you're on
+holiday your apps are down until it comes back (and if FileVault is on,
+until someone types the password: see <a href="/docs/living-in-a-closet/#reboots-and-filevault">Reboots and FileVault</a>).
+That's the right trade for side projects, internal tools, family apps and
+prototypes. It's the wrong one for anything where an hour of downtime costs
+real money.</p>
+
+    </article>
+    <section class="doc-index" aria-labelledby="all-docs">
+      <h2 id="all-docs">Everything in the docs</h2>
+      <h3>Getting going</h3>
+      <div class="cards">
+        <a class="card" href="/docs/what-you-need/">What you need</a>
+        <a class="card" href="/docs/setting-up/">Setting up</a>
+        <a class="card" href="/docs/starting-a-new-app/">Starting a new app</a>
+        <a class="card" href="/docs/deploying-an-app/">Deploying an app</a>
+      </div>
+      <h3>Day to day</h3>
+      <div class="cards">
+        <a class="card" href="/docs/releases-and-rollbacks/">Releases and rollbacks</a>
+        <a class="card" href="/docs/config/">Config</a>
+        <a class="card" href="/docs/logs-and-status/">Logs and status</a>
+        <a class="card" href="/docs/one-off-commands/">One-off commands</a>
+      </div>
+      <h3>Data and background work</h3>
+      <div class="cards">
+        <a class="card" href="/docs/postgres-and-redis/">Postgres and Redis</a>
+        <a class="card" href="/docs/sqlite/">SQLite</a>
+        <a class="card" href="/docs/migrations/">Migrations</a>
+        <a class="card" href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a>
+        <a class="card" href="/docs/persistent-storage/">Persistent storage</a>
+      </div>
+      <h3>Who sees what</h3>
+      <div class="cards">
+        <a class="card" href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a>
+        <a class="card" href="/docs/sign-in-with-google/">Sign in with Google</a>
+      </div>
+      <h3>Working with agents</h3>
+      <div class="cards">
+        <a class="card" href="/docs/dev-versions/">Dev versions</a>
+        <a class="card" href="/docs/pull-request-previews/">Pull request previews</a>
+        <a class="card" href="/docs/ai-for-your-apps/">AI for your apps</a>
+      </div>
+      <h3>Running the Mac</h3>
+      <div class="cards">
+        <a class="card" href="/docs/the-admin-page/">The admin page</a>
+        <a class="card" href="/docs/living-in-a-closet/">Living in a closet</a>
+        <a class="card" href="/docs/working-from-your-laptop/">Working from your laptop</a>
+        <a class="card" href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a>
+        <a class="card" href="/docs/upgrading/">Upgrading</a>
+      </div>
+      <h3>Reference</h3>
+      <div class="cards">
+        <a class="card" href="/docs/commands/">Commands</a>
+        <a class="card" href="/docs/troubleshooting/">Troubleshooting</a>
+        <a class="card" href="/docs/example-apps/">Example apps</a>
+        <a class="card" href="/docs/how-it-works/">How it works</a>
+        <a class="card" href="/docs/hacking-on-berth/">Hacking on Berth</a>
+      </div>
+      <h3>More</h3>
+      <div class="cards">
+        <a class="card" href="/docs/license/">License</a>
+      </div>
+    </section>
+    <nav class="pager" aria-label="Previous and next"><span></span><a class="next" href="/docs/what-you-need/"><span>Next</span>What you need</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postgres and Redis · Berth docs</title>
+<meta name="description" content="The app now has DATABASE_URL=postgres://myapp:…@192.168.66.1:6001/db.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/" aria-current="page">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="postgres-and-redis">Postgres and Redis</h1>
+      <pre><code class="language-bash">berth pg:create db                 # Postgres 17 in its own VM
+berth pg:link db myapp             # a login for myapp, DATABASE_URL set, redeployed
+</code></pre>
+<p>The app now has <code>DATABASE_URL=postgres://myapp:…@192.168.66.1:6001/db</code>. Each
+linked app gets its own login, but they share the tables, so several apps can
+use one database.</p>
+<pre><code class="language-bash">berth pg:psql db                                # psql
+berth pg:psql db -c &quot;select count(*) from users&quot;
+berth pg:backup db                              # pg_dump → ~/.berth/backups/pg/db/&lt;time&gt;.dump
+berth pg:restore db ~/.berth/backups/pg/db/20261025-030000.dump
+berth pg:expose db 15432                        # for TablePlus and friends, at 127.0.0.1:15432
+berth pg:expose db off
+berth pg:upgrade db --to 18                     # dump, new Postgres, restore, relink
+berth pg:unlink db myapp                        # revoke the login, remove DATABASE_URL
+berth pg:destroy db                             # refuses while apps are linked (--force if you mean it)
+berth pg:list
+</code></pre>
+<p><strong>Every Postgres database is dumped every night</strong> at 03:00, and the last 14
+dumps sit in <code>~/.berth/backups/pg/</code> where Time Machine will find them. The
+dumps are the real backup: the live files are inside a container volume, and
+copying a running database's files isn't reliable anyway. <code>pg:upgrade</code> keeps
+the old data volume until you delete it, just in case.</p>
+<p>Link a second database to the same app and its variable is named after it
+(<code>PG_ANALYTICS_URL</code>); pick your own name with <code>--as</code>.</p>
+<p><strong>Redis</strong> works the same way, with <code>REDIS_URL</code> and append-only persistence.
+Each linked app gets its own Redis user, so unlinking one doesn't disturb the
+others:</p>
+<pre><code class="language-bash">berth redis:create cache
+berth redis:link cache myapp
+berth redis:cli cache GET somekey
+berth redis:backup cache
+berth redis:restore cache ~/.berth/backups/redis/cache/&lt;time&gt;.rdb
+</code></pre>
+<p><code>pg:create</code> and <code>redis:create</code> take <code>--memory</code> (<code>512M</code> and <code>256M</code> by default)
+and <code>--image</code> (<code>--image postgres:16</code>, for example).</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/one-off-commands/"><span>Previous</span>One-off commands</a><a class="next" href="/docs/sqlite/"><span>Next</span>SQLite</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

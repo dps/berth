@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backups and moving to a new Mac · Berth docs</title>
+<meta name="description" content="It holds everything needed to rebuild: app settings and config, release history, fresh database backups and your storage folders.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/" aria-current="page">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="backups-and-moving-to-a-new-mac">Backups and moving to a new Mac</h1>
+      <p>Database backups happen every night on their own (<a href="/docs/postgres-and-redis/">Postgres</a>, <a href="/docs/sqlite/">SQLite</a>).
+For everything else there's one archive:</p>
+<pre><code class="language-bash">berth backup                         # → ~/berth-backup-&lt;time&gt;.tar.gz
+berth backup /Volumes/USB/berth.tar.gz
+</code></pre>
+<p>It holds everything needed to rebuild: app settings and config, release
+history, fresh database backups and your storage folders. It leaves out
+anything that can be fetched or rebuilt again (git mirrors, images, logs). It
+has your secrets in it, so keep it somewhere safe.</p>
+<p>To restore it, on the same Mac or a new one:</p>
+<pre><code class="language-bash">berth init --domain example.com      # on a Mac with no apps yet
+berth restore berth-backup.tar.gz
+</code></pre>
+<p>Everything comes back: each app's settings, config, domains, access rules,
+workers and AI access; sign-in groups and sessions; Postgres, Redis and
+SQLite from their backups; storage folders; and the GitHub, Cloudflare and Google logins.
+Every app is redeployed from its repo at the commit that was live. A few
+things come back lazily: apps without a repo come back with their settings
+(push to them to deploy), dev versions on their next <code>dev:push</code>, previews
+with their pull requests, and local AI models with <code>berth ai:setup</code>. LAN
+addresses change to the new Mac's name.</p>
+<h2 id="off-mac-backups">Off-Mac backups</h2>
+<p>That archive lives on the Mac, which doesn't help much if the Mac dies or
+walks off. So send one somewhere else every night:</p>
+<pre><code class="language-bash">berth offsite:setup --r2 &lt;cloudflare account id&gt; --bucket my-berth-backups
+</code></pre>
+<p>After the 03:00 dumps, Berth makes the same archive as <code>berth backup</code>,
+encrypts it on the Mac, uploads it, checks it arrived intact, and keeps the
+newest 14 (<code>--keep</code> changes that). Any S3-compatible storage works. For
+Cloudflare R2, create a bucket and an R2 API token with <em>Object Read &amp; Write</em>
+on it. For anything else (Backblaze B2, AWS S3, MinIO), pass <code>--endpoint</code>.
+Setup asks for the secret key without echoing it, and tries writing, reading,
+listing and deleting a test file before it saves anything.</p>
+<p>Setup then prints a <strong>recovery code</strong> (<code>berthrestore_…</code>). It's the bucket's
+address and credentials plus the key that encrypts the backups, all in one
+string. <strong>Save it somewhere that isn't the Mac.</strong> A password manager is
+perfect. The storage provider only ever sees ciphertext, and without the code
+nobody can read the backups, including you. <code>berth offsite:key</code> prints it
+again; it changes if you rerun setup with new credentials.</p>
+<pre><code class="language-bash">berth offsite:status                 # where they go, the last upload, what's in the bucket
+berth offsite:run                    # upload one now
+berth offsite:get                    # download and decrypt the latest, ready for berth restore
+berth offsite:off                    # stop (the bucket keeps its backups)
+</code></pre>
+<p><code>berth status</code> warns if no upload has worked for two days, and a failed
+upload sends a notification.</p>
+<h2 id="moving-to-a-new-mac">Moving to a new Mac</h2>
+<p>With off-Mac backups, moving is one command on the new Mac, once Homebrew and
+Berth are installed:</p>
+<pre><code class="language-bash">berth init --restore                 # asks for the recovery code
+</code></pre>
+<p>It fetches the newest backup and puts the old Mac's settings and logins in
+place. That means no <code>--domain</code>, and no Cloudflare or GitHub logins in the
+browser, since it reuses the same tunnel and token. Then it finishes setting
+up and restores every database and app as above.</p>
+<p>Turn Berth off on the old Mac first (<code>berth uninstall</code>). Otherwise both Macs
+share the tunnel and split your traffic between them, which is confusing.</p>
+<h2 id="uninstalling">Uninstalling</h2>
+<pre><code class="language-bash">berth uninstall              # stop everything and remove the background services; keeps ~/.berth
+berth uninstall --purge      # also delete every app, webhook, database volume, image and ~/.berth
+</code></pre>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/working-from-your-laptop/"><span>Previous</span>Working from your laptop</a><a class="next" href="/docs/upgrading/"><span>Next</span>Upgrading</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#off-mac-backups">Off-Mac backups</a></li>
+      <li><a href="#moving-to-a-new-mac">Moving to a new Mac</a></li>
+      <li><a href="#uninstalling">Uninstalling</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

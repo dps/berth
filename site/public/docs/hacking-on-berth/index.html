@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hacking on Berth · Berth docs</title>
+<meta name="description" content="The S3 client has a test against a real S3-compatible server.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/" aria-current="page">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="hacking-on-berth">Hacking on Berth</h1>
+      <pre><code class="language-bash">make build      # bin/berth and bin/berthd
+make test       # go test -race ./... (runs on Linux too, with a fake container runtime)
+</code></pre>
+<p>To try Berth without touching <code>~/.berth</code> or the default ports:</p>
+<pre><code class="language-bash">export BERTH_HOME=/tmp/berth-dev
+bin/berth init --no-tunnel --no-launchd --yes --skip-github
+# edit caddy_http, caddy_https, caddy_lan_http, caddy_admin and webhook_addr
+# in $BERTH_HOME/config.json, then regenerate Caddy's starting config:
+rm $BERTH_HOME/caddy.json &amp;&amp; bin/berth init --no-tunnel --no-launchd --yes --skip-github
+# and in two terminals:
+caddy run --config $BERTH_HOME/caddy.json
+bin/berthd --debug
+</code></pre>
+<p>The admin page is plain files in <code>internal/admin/ui</code>. To look at it against
+your real Berth without signing in, run a loopback-only preview that signs
+requests as a test viewer, then open http://127.0.0.1:7799:</p>
+<pre><code class="language-bash">BERTH_ADMIN_PREVIEW=7799 BERTH_ADMIN_PREVIEW_SECS=600 go test ./internal/daemon -run TestAdminPreview
+</code></pre>
+<p>The S3 client has a test against a real S3-compatible server. It's skipped
+unless <code>BERTH_S3_TEST=&lt;endpoint&gt;,&lt;bucket&gt;,&lt;access key&gt;,&lt;secret&gt;</code> is set;
+<code>internal/offsite/live_test.go</code> shows how to run one locally with rclone.</p>
+<p>To cut a release, <code>scripts/release.sh v0.2.0</code> runs the tests, tags, pushes,
+and points the Homebrew formula at the new tarball.</p>
+<p>The website, <a href="https://berth.computer">berth.computer</a>, lives in <code>site/</code> and is
+itself a Berth app (<code>berth create site --repo dps/berth --path site</code>). Its
+docs are this README, one page per <code>##</code> section with the sidebar taken from
+the Contents list, so after editing the README run <code>make site</code> and commit
+what it writes. The release script checks they match.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/how-it-works/"><span>Previous</span>How it works</a><a class="next" href="/docs/license/"><span>Next</span>License</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev versions · Berth docs</title>
+<meta name="description" content="That deploys the working tree exactly as it is on disk, uncommitted edits and new files included (.gitignore is respected, so .env and node_modules stay out).">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/" aria-current="page">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="dev-versions">Dev versions</h1>
+      <p>This is the part I use most. Every app has a dev version at
+<code>https://&lt;app&gt;-dev.&lt;your domain&gt;</code>, a place to try changes before they're
+committed. It's built so coding agents can test their own work. From the
+app's repo:</p>
+<pre><code class="language-bash">berth dev:push
+</code></pre>
+<p>That deploys the working tree exactly as it is on disk, uncommitted edits and
+new files included (<code>.gitignore</code> is respected, so <code>.env</code> and <code>node_modules</code>
+stay out). Your branch, index and stash aren't touched. A small change is
+live in about 5 seconds. Production is never affected; it still only deploys
+from pushes to its branch.</p>
+<p>For agents, <code>dev:push</code> waits until it's done and has useful exit codes:</p>
+<table>
+<thead>
+<tr>
+<th>Exit code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>live</td>
+</tr>
+<tr>
+<td>1</td>
+<td>the build failed (output above)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>it built but didn't start (its last log lines are above)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>the <a href="/docs/migrations/">release command</a> failed, e.g. a migration</td>
+</tr>
+</tbody>
+</table>
+<p><code>--json</code> prints the result (<code>status</code>, <code>stage</code>, <code>url</code>, <code>release</code>, the base
+commit and a summary of what's uncommitted) on stdout, with progress on
+stderr. A failed push leaves the previous dev release serving.</p>
+<p><code>berth dev:agents myapp</code> prints a block for the repo's <code>AGENTS.md</code> that tells
+an agent how to deploy, read logs and get in. Apps made with
+<a href="/docs/starting-a-new-app/"><code>berth new</code></a> already have it.</p>
+<h2 id="who-can-reach-it">Who can reach it</h2>
+<p>Dev versions run unreviewed code, so they're not public. With
+<a href="/docs/sign-in-with-google/">sign-in</a> set up they're open to the <code>@owners</code> group
+(<code>berth auth:group owners you@gmail.com</code>); without it, they're LAN only.
+Agents can't click through Google, so give them a token:</p>
+<pre><code class="language-bash">berth dev:token myapp --as test@example.com     # prints export BERTH_DEV_TOKEN=…
+curl -H &quot;Authorization: Bearer $BERTH_DEV_TOKEN&quot; https://myapp-dev.example.com/api/me
+berth dev:token myapp --revoke                  # revoke them all
+</code></pre>
+<p>With <code>--as</code>, requests are signed in as that pretend user
+(<code>X-Berth-User-Id: dev:test@example.com</code>), so an agent can test the signed-in
+parts of the app too. Tokens only work on dev versions and previews.</p>
+<h2 id="its-data-is-its-own">Its data is its own</h2>
+<p>A dev version never touches production's data:</p>
+<ul>
+<li><strong>Postgres:</strong> its own database (<code>&lt;db&gt;_dev</code>) in the same Postgres, with a
+login that can't connect to production's. It starts empty.
+<code>berth dev:db:copy myapp</code> replaces it with a copy of production's and runs
+the <a href="/docs/migrations/">release command</a> on it.</li>
+<li><strong>Redis:</strong> its own small Redis.</li>
+<li><strong>Storage:</strong> its own folders.</li>
+<li><strong>Config:</strong> copied from the app when the dev version is first made, minus
+the database URLs. API keys come along. Change it with
+<code>berth config:set myapp-dev KEY=value</code>.</li>
+</ul>
+<h2 id="its-just-another-app">It's just another app</h2>
+<p>The dev version is the app <code>myapp-dev</code>, so every command works on it:
+<code>berth logs myapp-dev -f</code>, <code>berth run myapp-dev npm run migrate</code>,
+<code>berth restart myapp-dev</code>. It keeps 3 releases, and it doesn't run
+<a href="/docs/workers-and-scheduled-jobs/#scheduled-jobs">scheduled jobs</a>.</p>
+<p>To save memory it goes to sleep after 12 hours with no pushes and no
+requests, and the next <code>dev:push</code> wakes it up. Change that with
+<code>dev_idle_hours</code> in <code>~/.berth/config.json</code>.</p>
+<p><code>berth dev:reset myapp</code> deletes the dev version and its data, so the next
+push starts fresh from the app's current config. <code>berth dev:off myapp</code>
+removes the dev address altogether.</p>
+<p>On your laptop, <code>berth dev:push</code> in the repo sends the snapshot to the Mac
+over SSH and deploys it there, with the same exit codes and <code>--json</code>. See
+<a href="/docs/working-from-your-laptop/">Working from your laptop</a>.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/sign-in-with-google/"><span>Previous</span>Sign in with Google</a><a class="next" href="/docs/pull-request-previews/"><span>Next</span>Pull request previews</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#who-can-reach-it">Who can reach it</a></li>
+      <li><a href="#its-data-is-its-own">Its data is its own</a></li>
+      <li><a href="#its-just-another-app">It&#39;s just another app</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

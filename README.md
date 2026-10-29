@@ -1492,6 +1492,12 @@ unless `BERTH_S3_TEST=<endpoint>,<bucket>,<access key>,<secret>` is set;
 To cut a release, `scripts/release.sh v0.2.0` runs the tests, tags, pushes,
 and points the Homebrew formula at the new tarball.
 
+The website, [berth.computer](https://berth.computer), lives in `site/` and is
+itself a Berth app (`berth create site --repo dps/berth --path site`). Its
+docs are this README, one page per `##` section with the sidebar taken from
+the Contents list, so after editing the README run `make site` and commit
+what it writes. The release script checks they match.
+
 ## License
 
 MIT

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workers and scheduled jobs · Berth docs</title>
+<meta name="description" content="berth_hello_python has a worker and two cron jobs if you want to see both working.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/" aria-current="page">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="workers-and-scheduled-jobs">Workers and scheduled jobs</h1>
+      <p><a href="https://github.com/dps/berth_hello_python">berth_hello_python</a> has a worker
+and two cron jobs if you want to see both working.</p>
+<h2 id="workers">Workers</h2>
+<p>Background processes go in the <code>Procfile</code>, next to the web process:</p>
+<pre><code>web: node server.js
+worker: node worker.js
+clock: node clock.js
+</code></pre>
+<p>Anything other than <code>web</code> and <code>release</code> is a worker. Each one runs as
+another process inside the app's container, with the same build, config and
+storage, and gets restarted (with backoff) if it exits. Workers move to each
+new release as it goes live, follow rollbacks, and stop and start with the
+app. The old release's workers stop before the new ones start, so a job never
+gets picked up twice. Each knows its name from <code>BERTH_PROCESS</code> (<code>worker.2</code>).
+You
+still need a web process, and it's always the image's own command: Berth
+doesn't read the <code>web:</code> line, so it's fine to keep it for other tools.</p>
+<pre><code class="language-bash">berth ps:scale myapp worker=3      # three of them
+berth ps:scale myapp clock=0       # none
+berth status myapp                 # each worker and how long it's been up
+berth logs myapp -f                # worker lines say which: v4 worker.2: …
+</code></pre>
+<p>Workers share the app's memory and CPUs, so if they're heavy, give the app
+more with <code>BERTH_MEMORY</code> and <code>BERTH_CPUS</code>. The image needs <code>/bin/sh</code>, <code>tr</code>
+and <code>grep</code>, which every common base image has.</p>
+<h2 id="scheduled-jobs">Scheduled jobs</h2>
+<p>Put a <code>cron</code> list in <code>app.json</code> at the root of the repo, in
+<a href="https://dokku.com/docs/processes/scheduled-cron-tasks/">Dokku's format</a>:</p>
+<pre><code class="language-json">{
+  &quot;cron&quot;: [
+    { &quot;command&quot;: &quot;node digest.js&quot;, &quot;schedule&quot;: &quot;0 7 * * *&quot; },
+    { &quot;command&quot;: &quot;python cleanup.py&quot;, &quot;schedule&quot;: &quot;@hourly&quot; }
+  ]
+}
+</code></pre>
+<p>Schedules are ordinary five-field cron (minute hour day month weekday, with
+ranges, steps, lists and names like <code>mon-fri</code>) or <code>@hourly</code>, <code>@daily</code>,
+<code>@weekly</code> and <code>@monthly</code>, in the Mac's local time. They ship with the code, so
+a rollback brings back the schedule that went with it, and a typo fails the
+deploy rather than quietly never running.</p>
+<p>Each run is a fresh container from the current release, with the app's
+config and storage. If a job is still running when its next turn comes round,
+that turn is skipped. When a job starts failing you get one notification,
+and another when it works again, not one per run (a job that runs every
+minute would otherwise send sixty an hour). <code>BERTH_CRON_TIMEOUT</code> (an hour by
+default) stops runaways. Runs missed while the Mac was off don't get made up.</p>
+<pre><code class="language-bash">berth cron myapp                   # the jobs, when they next run and how the last run went
+berth cron:run myapp 1             # run job 1 now and wait for it
+berth logs myapp --cron            # every run's output
+</code></pre>
+<p>Dev versions and previews don't run schedules. A job running against a copy
+of production's data could email real people. Try one by hand with
+<code>berth cron:run myapp-dev 1</code>.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/migrations/"><span>Previous</span>Migrations</a><a class="next" href="/docs/persistent-storage/"><span>Next</span>Persistent storage</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#workers">Workers</a></li>
+      <li><a href="#scheduled-jobs">Scheduled jobs</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

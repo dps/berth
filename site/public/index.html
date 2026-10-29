@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Berth: a dead simple PaaS for Mac minis</title>
+<meta name="description" content="Push to GitHub and your app is live in seconds, in its own little VM on a Mac mini in your closet. Postgres is one command away. Open source.">
+<meta property="og:title" content="Berth: a dead simple PaaS for Mac minis">
+<meta property="og:description" content="Push to GitHub and your app is live in seconds, on a Mac mini in your closet.">
+<meta property="og:url" content="https://berth.computer/">
+<meta property="og:image" content="https://berth.computer/assets/icon.png">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Open source · for Apple Silicon Macs</p>
+        <h1>Push to GitHub. It's live on the Mac in your closet.</h1>
+        <p class="lede">Berth is a dead simple PaaS for Mac minis. A few seconds after you push, your app is running in its own little VM at <code>https://myapp.yourdomain.com</code>. Postgres is one command away, and there's no monthly bill per app.</p>
+        <div class="actions">
+          <a class="button primary" href="/docs/setting-up/">Set up a Mac</a>
+          <a class="button secondary" href="/docs/">Read the docs</a>
+        </div>
+      </div>
+      <div class="terminal" role="img" aria-label="A terminal showing berth deploy building and releasing an app in a few seconds">
+        <div class="bar"><i></i><i></i><i></i></div>
+<pre class="no-copy"><span class="p">~/myapp $</span> berth deploy myapp
+<span class="d">-----></span> Fetching you/myapp (main)
+<span class="d">-----></span> Building myapp v12 from main@896a731 using Dockerfile
+<span class="d">-----></span> Built berth/myapp:12 in 4s
+<span class="d">-----></span> Starting berth-myapp-12-k3xq on 127.0.0.1:8003
+<span class="d">-----></span> Waiting for berth-myapp-12-k3xq to answer on /
+<span class="d">-----></span> <span class="ok">Healthy in 1.0s (HTTP 200)</span>
+<span class="d">-----></span> v12 is live; v11 drains for 5s, then stops
+<span class="d">=====></span> myapp v12 (896a731) is live at
+       <span class="u">https://myapp.example.com</span></pre>
+      </div>
+    </section>
+  </div>
+
+  <section class="band">
+    <div class="wrap install">
+      <div>
+        <h2>Three commands, then just <code>git push</code></h2>
+        <p class="intro">No ports opened on your router, no certificates, no YAML, no Docker Desktop, and no <code>sudo</code> once it's set up.</p>
+        <ol>
+          <li><strong>Install it on the Mac.</strong> Homebrew brings Apple's <code>container</code> runtime, Caddy and cloudflared along with it.</li>
+          <li><strong>Run <code>berth init</code> once.</strong> It connects your Cloudflare domain and GitHub in the browser. About three minutes.</li>
+          <li><strong>Create an app.</strong> Berth adds a webhook to the repo, so every push to <code>main</code> after that deploys itself.</li>
+        </ol>
+      </div>
+<pre>brew tap dps/berth https://github.com/dps/berth
+brew trust dps/berth
+brew install berth
+
+berth init --domain example.com       <span class="c"># once</span>
+berth create myapp --repo you/myapp  <span class="c"># once per app</span>
+git push                             <span class="c"># every deploy after that</span></pre>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <h2>The boring parts, done once</h2>
+      <p class="intro">Each piece of Berth exists because something was annoying without it.</p>
+      <div class="features">
+        <a class="feature" href="/docs/releases-and-rollbacks/">
+          <h3>Deploys without downtime</h3>
+          <p>The new release has to answer before it gets traffic, and the old one drains. Every deploy is a numbered release you can roll back to.</p>
+        </a>
+        <a class="feature" href="/docs/postgres-and-redis/">
+          <h3>Postgres, Redis and SQLite</h3>
+          <p>One command each, linked into the app's config. Dumped every night, and again before every migration runs.</p>
+        </a>
+        <a class="feature" href="/docs/dev-versions/">
+          <h3>A dev version for your agent</h3>
+          <p>Every app gets <code>myapp-dev</code>, with its own copy of the data. A coding agent can push uncommitted work there and check it really works.</p>
+        </a>
+        <a class="feature" href="/docs/pull-request-previews/">
+          <h3>Pull request previews</h3>
+          <p>Each pull request gets its own address, posted as a comment on the PR, and goes away when it closes.</p>
+        </a>
+        <a class="feature" href="/docs/sign-in-with-google/">
+          <h3>Sign in with Google</h3>
+          <p>Put any app behind Google sign-in: for everyone, for a list of people, or only on the pages that need it. Your app just reads a header.</p>
+        </a>
+        <a class="feature" href="/docs/workers-and-scheduled-jobs/">
+          <h3>Workers and cron</h3>
+          <p>Procfile workers run beside your web process and come back if they crash. Scheduled jobs come from <code>app.json</code>.</p>
+        </a>
+        <a class="feature" href="/docs/ai-for-your-apps/">
+          <h3>AI for every app</h3>
+          <p>One gateway for small models running on the Mac and cloud models with your keys, with a budget and usage for each app.</p>
+        </a>
+        <a class="feature" href="/docs/the-admin-page/">
+          <h3>An admin page</h3>
+          <p>Every app's health, requests, latency and errors, plus the Mac's load, at <code>admin.yourdomain.com</code>, for the owners you name.</p>
+        </a>
+        <a class="feature" href="/docs/backups-and-moving-to-a-new-mac/">
+          <h3>Backups that leave the house</h3>
+          <p>Encrypted on the Mac, then uploaded to Cloudflare R2 or any S3 bucket. A new Mac comes back from one recovery code.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <p class="intro">A Mac mini is a great home for small apps. It's quiet, it sips power, and an M4 with 16 GB runs twenty-odd apps and a couple of databases comfortably.</p>
+      <div class="flow">
+        <div>
+          <span class="node">git</span>
+          <h3>You push</h3>
+          <p>GitHub tells Berth over a webhook. Public repos work without one; Berth polls them.</p>
+        </div>
+        <div>
+          <span class="node">build</span>
+          <h3>The Mac builds it</h3>
+          <p>From your Dockerfile, or one Berth writes for Node, Bun, Python, Go, Rust or a static site.</p>
+        </div>
+        <div>
+          <span class="node mac">VM</span>
+          <h3>Each app gets a VM</h3>
+          <p>Apple's <code>container</code> runs every app in its own lightweight Linux VM, with its own memory limit.</p>
+        </div>
+        <div>
+          <span class="node">https</span>
+          <h3>Cloudflare brings visitors in</h3>
+          <p>A tunnel connects out from the Mac, so nothing at home is open to the internet. HTTPS just works.</p>
+        </div>
+      </div>
+      <p><a href="/docs/how-it-works/">More about how it works →</a></p>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap isnt">
+      <div>
+        <h2>What it isn't</h2>
+      </div>
+      <div>
+        <p>It's one Mac. There's no failover, and if the power goes out while you're on holiday, your apps are down until it comes back.</p>
+        <p>That's the right trade for side projects, internal tools, family apps and prototypes. It's the wrong one for anything where an hour of downtime costs real money.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <section class="here">
+      <img src="/assets/icon.svg" alt="">
+      <div>
+        <h2>You're looking at a Berth app</h2>
+        <p>This site is served from a Mac mini in a closet, through a Cloudflare tunnel. Its docs are the <a href="https://github.com/dps/berth#readme">README</a>, and a push to the repo redeploys them. If it's down, now you know why.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <p><a href="https://github.com/dps/berth">Berth on GitHub</a> · <a href="/docs/">Docs</a> · MIT license</p>
+</footer>
+</body>
+</html>

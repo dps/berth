@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "push main first" >&2; exit 1; }
 make test
+make site
+[ -z "$(git status --porcelain site)" ] || { echo "the docs site is out of date with README.md: commit what make site wrote" >&2; exit 1; }
 
 git tag -a "$v" -m "Berth $v"
 git push -q origin "$v"

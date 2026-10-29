@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting · Berth docs</title>
+<meta name="description" content="Start with berth doctor.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/" aria-current="page">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="troubleshooting">Troubleshooting</h1>
+      <p><strong>Start with <code>berth doctor</code>.</strong> It checks each moving part and prints the
+command that fixes whatever's wrong.</p>
+<p><strong>A deploy failed.</strong> The error ends with the app's last log lines; for the
+whole story, <code>berth logs myapp --build</code> then <code>berth logs myapp</code>. The previous
+release is still serving. The usual suspects: the app listens on <code>localhost</code>
+instead of <code>0.0.0.0</code>, or ignores <code>$PORT</code>; it's slow to boot (raise
+<code>BERTH_HEALTH_TIMEOUT</code>); or <code>/</code> returns a 5xx (point <code>BERTH_HEALTHCHECK</code> at a
+health endpoint).</p>
+<p><strong>A push didn't deploy.</strong> Run <code>berth events</code>. You'll see <code>webhook</code> entries if
+GitHub reached the Mac, or <code>webhook.rejected</code> for a bad signature. Without
+webhooks, polling picks the push up within a minute. A monorepo app ignores
+pushes that don't touch its path.</p>
+<p><strong><code>berth: berthd is not running</code>.</strong> Start it with
+<code>launchctl kickstart -k gui/$UID/dev.berth.berthd</code>. Its log is
+<code>~/.berth/logs/berthd.log</code>.</p>
+<p><strong>The public URL doesn't work but the <code>.local</code> one does.</strong> That's the tunnel.
+<code>berth doctor</code> checks it's connected and that the wildcard DNS record
+resolves. cloudflared's log is <code>~/.berth/logs/cloudflared.log</code>.</p>
+<p><strong>An app says <code>crashed</code>.</strong> It failed to start 10 times in a row. Look at
+<code>berth logs myapp</code>, fix it, then <code>berth restart myapp</code> or push.</p>
+<p><strong><code>berth upgrade</code> says it's done but the version didn't change.</strong> You're on
+0.1.0 or 0.1.1: run <code>brew update &amp;&amp; brew upgrade berth</code> once.</p>
+<p><strong>I edited files in <code>~/.berth</code> by hand.</strong> Run <code>berth reload</code> and <code>berthd</code>
+rebuilds the proxy and tunnel config and the set of running containers from
+the files.</p>
+<h2 id="environment-variables">Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BERTH_HOST</code></td>
+<td>on a laptop, the Mac to run commands on, as <code>ssh</code> knows it (<code>you@your-mac.local</code>)</td>
+</tr>
+<tr>
+<td><code>BERTH_HOME</code></td>
+<td>use a different state folder (default <code>~/.berth</code>)</td>
+</tr>
+<tr>
+<td><code>BERTH_DEBUG=1</code></td>
+<td><code>berthd</code> logs every external command and how long it took</td>
+</tr>
+<tr>
+<td><code>BERTH_GITHUB_CLIENT_ID</code></td>
+<td>GitHub OAuth app for the browser login in <code>init</code></td>
+</tr>
+<tr>
+<td><code>BERTH_CONTAINER_BIN</code></td>
+<td>path to the <code>container</code> binary</td>
+</tr>
+<tr>
+<td><code>BERTH_NO_MDNS=1</code></td>
+<td>don't advertise <code>.local</code> hostnames</td>
+</tr>
+</tbody>
+</table>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/commands/"><span>Previous</span>Commands</a><a class="next" href="/docs/example-apps/"><span>Next</span>Example apps</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

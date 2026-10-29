@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Working from your laptop · Berth docs</title>
+<meta name="description" content="Every berth command then runs on the Mac over SSH, attached to your terminal, so prompts, berth logs -f and berth run shells all work.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/" aria-current="page">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="working-from-your-laptop">Working from your laptop</h1>
+      <p>The Mac can live in the closet while you, your editor and your agent work on
+a laptop. Install the CLI there too, but don't run <code>init</code>: use the Homebrew
+formula on a Mac that meets <a href="/docs/what-you-need/">the requirements</a>, or
+<code>go install github.com/dps/berth/cmd/berth@latest</code> anywhere else Go runs
+(Intel Macs and Linux included). Then tell it where the Mac is:</p>
+<pre><code class="language-bash">export BERTH_HOST=you@your-mac.local     # whatever name ssh knows the Mac by
+berth status
+</code></pre>
+<p>Every <code>berth</code> command then runs on the Mac over SSH, attached to your
+terminal, so prompts, <code>berth logs -f</code> and <code>berth run</code> shells all work. You
+need Remote Login on the Mac (System Settings → General → Sharing) and SSH
+keys, so there's no password prompt.</p>
+<p>Inside an app's repo, the <code>berth</code> git remote does the same job as
+<code>BERTH_HOST</code>, so an agent working there doesn't need anything set. <code>berth new</code>
+adds it; for an existing clone, run <code>berth git:remote myapp</code> once in the repo.</p>
+<p>A few commands do their work on the laptop instead: <code>berth new</code> and
+<code>dev:push</code> (they need the files here), <code>upgrade</code>, <code>git:remote</code> (it adds the
+remote here), <code>admin</code> (it opens your browser here), and <code>config:import</code>,
+which sends the laptop's <code>.env</code>. Any other path you pass, as in
+<code>berth pg:restore db dump.sql</code>, is a path on the Mac.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/living-in-a-closet/"><span>Previous</span>Living in a closet</a><a class="next" href="/docs/backups-and-moving-to-a-new-mac/"><span>Next</span>Backups and moving to a new Mac</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI for your apps · Berth docs</title>
+<meta name="description" content="Berth can give any app an LLM: small models running on the Mac itself, cloud models with keys you add once, or both.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/" aria-current="page">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="ai-for-your-apps">AI for your apps</h1>
+      <p>Berth can give any app an LLM: small models running on the Mac itself, cloud
+models with keys you add once, or both. Apps reach all of them through one
+gateway in Berth using the OpenAI or Anthropic SDK they'd use anyway, and
+they never see your provider keys.</p>
+<h2 id="set-it-up-once-1">Set it up once</h2>
+<pre><code class="language-bash">berth ai:setup
+</code></pre>
+<p>This installs <a href="https://ollama.com">Ollama</a> with Homebrew and starts it with
+the Mac (it asks first), then downloads a model that fits: <code>qwen3:8b</code> with
+16 GB of memory or more, <code>qwen3:4b</code> below that. Pick another with
+<code>--model gemma3:4b</code>, or skip local models with <code>--cloud-only</code>. Local models
+run on the Mac's GPU, outside the app containers, which can't use it.</p>
+<p>Add whichever cloud providers you want (the key prompt is hidden):</p>
+<pre><code class="language-bash">berth ai:key anthropic          # also openai, gemini, openrouter, groq, mistral
+berth ai:key together --url https://api.together.xyz/v1    # anything OpenAI-compatible
+</code></pre>
+<h2 id="give-an-app-access">Give an app access</h2>
+<pre><code class="language-bash">berth ai:enable myapp
+</code></pre>
+<p>The app gets its own token and the usual variables, and redeploys:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OPENAI_BASE_URL</code></td>
+<td><code>http://&lt;gateway&gt;:7790/v1</code></td>
+</tr>
+<tr>
+<td><code>OPENAI_API_KEY</code></td>
+<td><code>berth_ai_…</code> (this app's token)</td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_BASE_URL</code></td>
+<td><code>http://&lt;gateway&gt;:7790/anthropic</code></td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td>the same token</td>
+</tr>
+</tbody>
+</table>
+<p>The official SDKs read those by themselves, so there's nothing Berth-specific
+in your code:</p>
+<pre><code class="language-js">import OpenAI from &quot;openai&quot;;
+const client = new OpenAI();   // reads OPENAI_BASE_URL and OPENAI_API_KEY
+const reply = await client.chat.completions.create({
+  model: &quot;default&quot;,
+  messages: [{ role: &quot;user&quot;, content: &quot;Hello!&quot; }],
+});
+</code></pre>
+<p>Python's <code>openai</code> and <code>anthropic</code> packages work the same way. Every provider
+speaks the OpenAI format (<code>/v1/chat/completions</code>, <code>/v1/embeddings</code>,
+<code>/v1/models</code>), and Claude models also speak Anthropic's own API, for tools,
+prompt caching and extended thinking.</p>
+<h2 id="choosing-models">Choosing models</h2>
+<p>Apps ask for a model by name, like <code>local/qwen3:8b</code> or
+<code>anthropic/claude-sonnet-5-5</code>, or by an <strong>alias</strong> you set up once for every
+app:</p>
+<pre><code class="language-bash">berth ai:alias smart anthropic/claude-sonnet-5-5
+berth ai:alias fast  groq/llama-3.3-70b-versatile
+berth ai:models                  # aliases, local models, providers
+berth ai:pull nomic-embed-text   # another local model, e.g. for embeddings
+</code></pre>
+<p><code>ai:setup</code> points <code>default</code> at the local model. I'd write apps against
+aliases (<code>&quot;default&quot;</code>, <code>&quot;smart&quot;</code>) rather than model names: change what an
+alias points at and every app picks it up immediately, no redeploy.</p>
+<h2 id="limits-and-usage">Limits and usage</h2>
+<pre><code class="language-bash">berth ai:enable myapp --models default,smart --monthly-tokens 2000000 --rpm 60
+berth ai:usage                   # requests and tokens per app and model this month
+berth ai:status                  # what's running, what's loaded, each app's usage
+berth ai:disable myapp           # revoke its token
+</code></pre>
+<p><code>--models</code> takes aliases, <code>provider/model</code> or <code>provider/*</code>. An app over a
+limit gets a 429 that says which limit and how to raise it. Usage records
+tokens and timings, never prompts or replies.</p>
+<p><a href="/docs/dev-versions/">Dev versions</a> of an AI app get their own token that only
+reaches local models, so an agent testing changes can't run up a cloud bill
+(<code>berth ai:enable myapp-dev --models 'local/*,smart'</code> lifts that).</p>
+<h2 id="memory">Memory</h2>
+<p>A loaded local model takes real memory: about 5 GB for an 8B model, 2.5 GB
+for a 4B one. Ollama lets go of it after 5 idle minutes. <code>berth status</code> shows
+what's loaded, counts it, and warns when apps, databases and the model
+together get close to the Mac's RAM. On an 8 GB Mac, use a cloud provider (or
+a really small model).</p>
+<p>The gateway listens on port 7790 on the containers' network, and only
+containers on this Mac can reach it. To change the port, set <code>ai_port</code> in
+<code>~/.berth/config.json</code> and run <code>berth reload</code>. To use Ollama on another
+machine, set <code>ollama_url</code> in <code>~/.berth/ai/config.json</code>.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/pull-request-previews/"><span>Previous</span>Pull request previews</a><a class="next" href="/docs/the-admin-page/"><span>Next</span>The admin page</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#set-it-up-once-1">Set it up once</a></li>
+      <li><a href="#give-an-app-access">Give an app access</a></li>
+      <li><a href="#choosing-models">Choosing models</a></li>
+      <li><a href="#limits-and-usage">Limits and usage</a></li>
+      <li><a href="#memory">Memory</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Page.Slug}}{{.Page.Title}} · {{end}}Berth docs</title>
+<meta name="description" content="{{.Page.Summary}}">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+<!-- Generated from README.md by tools/sitegen; edit the README, then run make site. -->
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="{{.Home.URL}}"{{if eq .Page.URL .Home.URL}} aria-current="page"{{end}}>{{.Home.Title}}</a></li></ul>
+      {{- range .Groups}}
+      <h2>{{.Name}}</h2>
+      <ul>
+        {{- range .Pages}}
+        <li><a href="{{.URL}}"{{if eq .URL $.Page.URL}} aria-current="page"{{end}}>{{.Title}}</a></li>
+        {{- end}}
+      </ul>
+      {{- end}}
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="{{if .Page.Slug}}{{.Page.Slug}}{{else}}why{{end}}">{{if .Page.Slug}}{{.Page.Title}}{{else}}Why Berth{{end}}</h1>
+      {{.Page.Content}}
+    </article>
+    {{- if .Index}}
+    <section class="doc-index" aria-labelledby="all-docs">
+      <h2 id="all-docs">Everything in the docs</h2>
+      {{- range .Index}}
+      <h3>{{.Name}}</h3>
+      <div class="cards">
+        {{- range .Pages}}
+        <a class="card" href="{{.URL}}">{{.Title}}</a>
+        {{- end}}
+      </div>
+      {{- end}}
+    </section>
+    {{- end}}
+    <nav class="pager" aria-label="Previous and next">
+      {{- with .Prev}}<a class="prev" href="{{.URL}}"><span>Previous</span>{{.Title}}</a>{{else}}<span></span>{{end}}
+      {{- with .Next}}<a class="next" href="{{.URL}}"><span>Next</span>{{.Title}}</a>{{end}}
+    </nav>
+    <p class="edit"><a href="{{.Edit}}">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  {{- if gt (len .Page.Subs) 1}}
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      {{- range .Page.Subs}}
+      <li><a href="#{{.ID}}">{{.Title}}</a></li>
+      {{- end}}
+    </ul>
+  </nav>
+  {{- end}}
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

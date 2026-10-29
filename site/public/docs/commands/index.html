@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commands · Berth docs</title>
+<meta name="description" content="Add --json to any non-interactive command for machine-readable output.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/" aria-current="page">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="commands">Commands</h1>
+      <p>Add <code>--json</code> to any non-interactive command for machine-readable output.
+Progress goes to stderr and the result to stdout, which is what scripts and
+agents want. <code>berth &lt;command&gt; --help</code> has more on each.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Setup</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth init --domain d</code></td>
+<td>one-time setup; safe to rerun (<a href="/docs/setting-up/">flags</a>)</td>
+</tr>
+<tr>
+<td><code>berth init --restore</code></td>
+<td>set up a new Mac from your off-Mac backups</td>
+</tr>
+<tr>
+<td><code>berth doctor [--images]</code></td>
+<td>check everything and print fixes</td>
+</tr>
+<tr>
+<td><code>berth cf:login &lt;zone&gt;</code></td>
+<td>connect another Cloudflare zone, for custom domains</td>
+</tr>
+<tr>
+<td><code>berth trust-ca</code></td>
+<td>trust Caddy's local CA in your login keychain</td>
+</tr>
+<tr>
+<td><code>berth upgrade [--check]</code></td>
+<td>upgrade Berth here (and, from a laptop, on the Mac)</td>
+</tr>
+<tr>
+<td><code>berth uninstall [--purge]</code></td>
+<td>remove Berth</td>
+</tr>
+<tr>
+<td><strong>Apps</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth new &lt;app&gt; [--stack node|python|go|static] [--repo r] [--public] [--no-github] [--no-deploy] [-y]</code></td>
+<td>start an app: starter code, <code>AGENTS.md</code>, a GitHub repo, the first deploy</td>
+</tr>
+<tr>
+<td><code>berth create &lt;app&gt; [--repo r] [--branch b] [--path p] [--private] [--no-webhook] [--no-deploy]</code></td>
+<td>register and deploy an app</td>
+</tr>
+<tr>
+<td><code>berth deploy &lt;app&gt; [--ref r] [--no-cache]</code></td>
+<td>build and release now</td>
+</tr>
+<tr>
+<td><code>berth rollback &lt;app&gt; [n] [--with-data]</code></td>
+<td>back to the previous (or nth) release; <code>--with-data</code> restores its databases too</td>
+</tr>
+<tr>
+<td><code>berth restart | stop | start &lt;app&gt;</code></td>
+<td>lifecycle</td>
+</tr>
+<tr>
+<td><code>berth releases &lt;app&gt;</code></td>
+<td>release history</td>
+</tr>
+<tr>
+<td><code>berth destroy &lt;app&gt; [--keep-data]</code></td>
+<td>delete an app, its webhook and images</td>
+</tr>
+<tr>
+<td><code>berth dockerfile &lt;app&gt;</code></td>
+<td>print the Dockerfile Berth would use</td>
+</tr>
+<tr>
+<td><code>berth git:remote &lt;app&gt; [--host h]</code></td>
+<td>add a <code>berth</code> remote, for <code>git push berth</code>, <code>dev:push</code> and running commands from a laptop</td>
+</tr>
+<tr>
+<td><code>berth app:set-key &lt;app&gt;</code></td>
+<td>use an SSH deploy key for this repo</td>
+</tr>
+<tr>
+<td><code>berth app:set-repo &lt;app&gt; &lt;repo&gt; [--branch b]</code></td>
+<td>deploy from another repo or branch</td>
+</tr>
+<tr>
+<td><code>berth ps:scale &lt;app&gt; &lt;type&gt;=&lt;n&gt;…</code></td>
+<td>how many of each Procfile worker to run</td>
+</tr>
+<tr>
+<td><code>berth cron &lt;app&gt;</code> · <code>cron:run &lt;app&gt; &lt;n&gt;</code></td>
+<td>scheduled jobs from <code>app.json</code>; run one now</td>
+</tr>
+<tr>
+<td><strong>Config</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth config:set &lt;app&gt; K=v … [--no-restart] [--build-arg]</code></td>
+<td>set variables and redeploy</td>
+</tr>
+<tr>
+<td><code>berth config:unset &lt;app&gt; K …</code></td>
+<td>remove variables</td>
+</tr>
+<tr>
+<td><code>berth config:get &lt;app&gt; K</code></td>
+<td>print one variable</td>
+</tr>
+<tr>
+<td><code>berth config:show &lt;app&gt; [--reveal] [--shell]</code></td>
+<td>list variables</td>
+</tr>
+<tr>
+<td><code>berth config:import &lt;app&gt; &lt;file|-&gt; [--replace]</code></td>
+<td>load a <code>.env</code> file (<code>-</code> reads stdin)</td>
+</tr>
+<tr>
+<td><strong>Logs and status</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth logs &lt;app&gt; [-f] [-n N] [--since d] [--build [n]] [--release [n]] [--access] [--cron]</code></td>
+<td>app, build, release-command, access or scheduled-job logs</td>
+</tr>
+<tr>
+<td><code>berth logs --all [-f]</code></td>
+<td>every app's logs</td>
+</tr>
+<tr>
+<td><code>berth status [app]</code></td>
+<td>overview, or one app</td>
+</tr>
+<tr>
+<td><code>berth events [-f]</code></td>
+<td>event log</td>
+</tr>
+<tr>
+<td><strong>Running things</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth run &lt;app&gt; &lt;cmd…&gt;</code></td>
+<td>one-off command in a fresh container (inside the running one, for apps with SQLite)</td>
+</tr>
+<tr>
+<td><code>berth exec &lt;app&gt; [cmd…]</code></td>
+<td>command or shell in the running container</td>
+</tr>
+<tr>
+<td><strong>Data</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth pg:create | link | unlink | psql | backup | restore | expose | upgrade | destroy | list</code></td>
+<td>Postgres</td>
+</tr>
+<tr>
+<td><code>berth redis:create | link | unlink | cli | backup | restore | expose | destroy | list</code></td>
+<td>Redis</td>
+</tr>
+<tr>
+<td><code>berth sqlite:add | remove | shell | backup | restore &lt;app&gt;</code> · <code>sqlite:list</code></td>
+<td>an app's own SQLite database</td>
+</tr>
+<tr>
+<td><code>berth storage:mount | unmount | list &lt;app&gt; [path]</code></td>
+<td>persistent folders</td>
+</tr>
+<tr>
+<td><strong>Hostnames and access</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth domains:add | remove | list &lt;app&gt; [host] [--force]</code></td>
+<td>custom domains</td>
+</tr>
+<tr>
+<td><code>berth auth:set &lt;app&gt; user:pass</code> · <code>auth:unset &lt;app&gt;</code></td>
+<td>basic auth</td>
+</tr>
+<tr>
+<td><code>berth access &lt;app&gt; [path] [public | signed-in | allow who... | off] [--remove]</code></td>
+<td>Google sign-in policy</td>
+</tr>
+<tr>
+<td><code>berth auth:setup google [--host h]</code> · <code>auth:status</code> · <code>auth:group &lt;name&gt; [who...]</code> · <code>auth:sessions</code> · <code>auth:revoke &lt;email&gt;</code></td>
+<td>sign-in setup, groups, sessions</td>
+</tr>
+<tr>
+<td><strong>Dev versions and previews</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth dev:push [app] [--json]</code></td>
+<td>deploy the working tree to <code>&lt;app&gt;-dev</code></td>
+</tr>
+<tr>
+<td><code>berth dev:token &lt;app&gt; [--as email] [--revoke]</code> · <code>dev:db:copy</code> · <code>dev:reset</code> · <code>dev:agents</code> · <code>dev:off</code> · <code>dev:on</code></td>
+<td>manage dev versions</td>
+</tr>
+<tr>
+<td><code>berth previews &lt;app&gt;</code> · <code>previews:on &lt;app&gt; [--max n]</code> · <code>previews:off &lt;app&gt;</code></td>
+<td>pull request previews</td>
+</tr>
+<tr>
+<td><strong>AI</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth ai:setup [--model m] [--cloud-only]</code></td>
+<td>install Ollama, download a local model, start the gateway</td>
+</tr>
+<tr>
+<td><code>berth ai:key &lt;provider&gt; [key] [--url u] [--remove]</code></td>
+<td>add a cloud provider's key (or any OpenAI-compatible URL)</td>
+</tr>
+<tr>
+<td><code>berth ai:alias [name] [provider/model] [--remove]</code></td>
+<td>name models for apps; changes apply at once</td>
+</tr>
+<tr>
+<td><code>berth ai:enable &lt;app&gt; [--models …] [--monthly-tokens n] [--rpm n]</code> · <code>ai:disable &lt;app&gt;</code></td>
+<td>give or revoke an app's access</td>
+</tr>
+<tr>
+<td><code>berth ai:status</code> · <code>ai:models</code> · <code>ai:pull &lt;model&gt;</code> · <code>ai:usage [app] [--month m]</code></td>
+<td>what's available, downloads, usage</td>
+</tr>
+<tr>
+<td><strong>Running the Mac</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>berth admin</code> · <code>admin:enable [--host h] [--owner email]</code> · <code>admin:disable</code></td>
+<td>the admin page for <code>@owners</code></td>
+</tr>
+<tr>
+<td><code>berth backup [file]</code> · <code>berth restore &lt;file&gt;</code></td>
+<td>archive and restore everything</td>
+</tr>
+<tr>
+<td><code>berth offsite:setup</code> · <code>offsite:status</code> · <code>offsite:run</code> · <code>offsite:get [backup]</code> · <code>offsite:key</code> · <code>offsite:off</code></td>
+<td>encrypted nightly backups to S3-compatible storage</td>
+</tr>
+<tr>
+<td><code>berth notify:set &lt;url|off&gt;</code></td>
+<td>notifications</td>
+</tr>
+<tr>
+<td><code>berth gc</code></td>
+<td>clean up old images, dumps and build files</td>
+</tr>
+<tr>
+<td><code>berth reboot</code></td>
+<td>planned reboot that comes back with nobody there</td>
+</tr>
+<tr>
+<td><code>berth reload</code></td>
+<td>re-read <code>~/.berth</code> after you've edited files by hand</td>
+</tr>
+<tr>
+<td><code>berth completion zsh | bash | fish</code></td>
+<td>shell completions (Homebrew installs them)</td>
+</tr>
+</tbody>
+</table>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/upgrading/"><span>Previous</span>Upgrading</a><a class="next" href="/docs/troubleshooting/"><span>Next</span>Troubleshooting</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

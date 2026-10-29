@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Living in a closet · Berth docs</title>
+<meta name="description" content="Berth is built to run for months without anyone looking at the screen.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/" aria-current="page">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="living-in-a-closet">Living in a closet</h1>
+      <p>Berth is built to run for months without anyone looking at the screen.</p>
+<ul>
+<li><strong>Crashed apps restart.</strong> An app that exits is restarted with backoff (1
+second, growing to 60). After 10 crashes without 10 healthy minutes in
+between, Berth gives up: the app is marked <code>crashed</code>, its URL answers 503,
+you get a notification, and it stays down until you deploy or
+<code>berth restart</code> it. Databases are restarted whenever they're down.</li>
+<li><strong>Reboots come back.</strong> When <code>berthd</code> starts, it starts Apple's container
+system, then the databases, then every app, oldest first.</li>
+<li><strong>Network glitches fix themselves.</strong> Apple's container network occasionally
+loses its route to the internet (builds fail, apps can't reach outside
+APIs) while the Mac itself is fine. <code>berthd</code> checks every 5 minutes, and
+after two failures in a row restarts the container system. Apps are down
+for about 6 seconds and you get a notification. Set
+<code>&quot;auto_heal_network&quot;: false</code> in <code>~/.berth/config.json</code> if you'd rather just
+be told.</li>
+<li><strong>Full disks don't happen.</strong> Berth refuses to deploy with less than 2 GB
+free rather than filling the boot volume.</li>
+</ul>
+<h2 id="notifications">Notifications</h2>
+<pre><code class="language-bash">berth notify:set https://hooks.slack.com/services/…    # Slack, Discord or ntfy.sh
+berth notify:set off
+</code></pre>
+<p>You hear about deploys that succeed or fail, apps or workers stuck
+crash-looping, scheduled jobs that fail, and nightly or off-Mac backups that
+fail. <code>notify:set</code> sends a test message first.</p>
+<h2 id="reboots-and-filevault">Reboots and FileVault</h2>
+<p>This is the one real trade-off. With FileVault on, macOS turns off automatic
+login, and after a power cut the Mac sits at a password screen before
+anything (Berth included) can start. So pick one:</p>
+<ul>
+<li><strong>FileVault on (the default, and what I'd do).</strong> Crashes and restarts
+recover on their own. For planned reboots, like macOS updates, use
+<code>berth reboot</code>: it unlocks the disk for exactly one boot
+(<code>fdesetup authrestart</code>), so the Mac comes back with nobody there. After an
+<em>unplanned</em> power cut someone has to type the password. A small UPS makes
+that rare.</li>
+<li><strong>Unattended (<code>berth init --unattended</code>).</strong> FileVault off, automatic login
+on (<code>init</code> shows you where). Power cuts recover with nobody home, but the
+disk, secrets and all, isn't encrypted.</li>
+</ul>
+<p><code>berth doctor</code> tells you which mode you're in and whether it's set up right.</p>
+<h2 id="keeping-it-tidy">Keeping it tidy</h2>
+<pre><code class="language-bash">berth doctor             # checks everything Berth relies on and prints a fix for each problem
+berth doctor --images    # and which base images have updates
+berth gc                 # clear out old release images, expired dumps and leftover build files
+</code></pre>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/the-admin-page/"><span>Previous</span>The admin page</a><a class="next" href="/docs/working-from-your-laptop/"><span>Next</span>Working from your laptop</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#notifications">Notifications</a></li>
+      <li><a href="#reboots-and-filevault">Reboots and FileVault</a></li>
+      <li><a href="#keeping-it-tidy">Keeping it tidy</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

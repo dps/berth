@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logs and status · Berth docs</title>
+<meta name="description" content="Every line has the time and the release that wrote it.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/" aria-current="page">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="logs-and-status">Logs and status</h1>
+      <pre><code class="language-bash">berth logs myapp                   # the last 200 lines
+berth logs myapp -f                # follow
+berth logs myapp --since 30m -n 1000
+berth logs myapp --build           # the latest build (or --build 12)
+berth logs myapp --release         # the latest release command, i.e. migrations
+berth logs myapp --access          # a line per HTTP request
+berth logs myapp --cron            # scheduled jobs
+berth logs --all -f                # every app at once
+</code></pre>
+<p>Every line has the time and the release that wrote it. Logs live in
+<code>~/.berth/apps/&lt;app&gt;/logs/</code>, outlive the containers that wrote them, and roll
+over at 50 MB.</p>
+<p><code>berth status</code> is the one screen I look at most:</p>
+<pre><code>berth v0.1.2 · example.com · berthd up 3d4h
+container ✓ running · caddy ✓ up · tunnel ✓ connected (remote) · disk 101.7 GB free · memory 2.2 GB of 16.0 GB committed
+
+APP     STATE    REL  SHA      UPTIME  MEM            PORT  URL                        LAST DEPLOY
+myapp   running  v4   b3ab439  2h      131.0 MB/512M  8001  https://myapp.example.com  v4 running 2h ago
+blog    running  v12  77ac1f0  3d      58.8 MB/512M   8003  https://blog.example.com   v12 running 3d ago
+
+SERVICE      IMAGE        STATE    MEM       ENDPOINT           LINKED TO  LAST BACKUP
+pg:db        postgres:17  running  209.3 MB  192.168.66.1:6001  [myapp]    9h ago
+</code></pre>
+<p>Anything wrong shows up underneath: a crashed app, a database that's down,
+low disk, memory over 80% committed, a backup that hasn't worked lately.
+<code>berth status myapp</code> zooms in on one app.</p>
+<pre><code class="language-bash">berth events -f       # deploys, crashes, restarts, webhooks and backups as they happen
+</code></pre>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/config/"><span>Previous</span>Config</a><a class="next" href="/docs/one-off-commands/"><span>Next</span>One-off commands</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

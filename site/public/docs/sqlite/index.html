@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQLite · Berth docs</title>
+<meta name="description" content="The app now has DATABASE_URL=sqlite:////data/sqlite/app.db, and SQLITE_PATH=/data/sqlite/app.db for libraries that want a plain path.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/" aria-current="page">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="sqlite">SQLite</h1>
+      <p>If your app wants a SQLite file rather than a database server, give it one:</p>
+<pre><code class="language-bash">berth sqlite:add myapp
+</code></pre>
+<p>The app now has <code>DATABASE_URL=sqlite:////data/sqlite/app.db</code>, and
+<code>SQLITE_PATH=/data/sqlite/app.db</code> for libraries that want a plain path. If
+<code>DATABASE_URL</code> is already taken, pick another name with <code>--as SQLITE_URL</code>.</p>
+<pre><code class="language-bash">berth sqlite:shell myapp                        # sqlite3, inside the app
+berth sqlite:shell myapp &quot;select count(*) from notes&quot;
+berth sqlite:backup myapp                       # → ~/.berth/backups/sqlite/myapp/&lt;time&gt;.db
+berth sqlite:restore myapp ~/.berth/backups/sqlite/myapp/20261028-030000.db
+berth sqlite:list
+berth sqlite:remove myapp                       # the data stays unless you add --delete-data
+</code></pre>
+<p>The file lives on a disk image that only one container can attach at a time.
+That matters because every Berth container is its own little VM, and
+SQLite's locks don't reach from one VM into another. Two containers sharing
+a SQLite file in an ordinary folder can both write at once and corrupt it. So
+an app with SQLite runs one container at a time:</p>
+<ul>
+<li><strong>Deploys stop the old version before starting the new one.</strong> Visitors
+wait a few seconds rather than getting an error. If the new version doesn't
+come up, the old one starts again.</li>
+<li><strong>Scheduled jobs and <code>berth run</code> happen inside the running app</strong>, not in a
+new container.</li>
+<li><strong>Workers can use the database too</strong>: they run inside the app's
+container, like every app's <a href="/docs/workers-and-scheduled-jobs/#workers">workers</a>.</li>
+</ul>
+<p><strong>It's backed up every night</strong> along with Postgres, and before every release
+command. Each backup is one ordinary SQLite file in
+<code>~/.berth/backups/sqlite/</code>, checked on the Mac before it's kept. Backups
+happen while the app keeps running, as long as its image has <code>sqlite3</code> or
+Python (most do). If it has neither, the nightly backup stops the app for a
+few seconds instead, and <code>sqlite:backup</code> asks you to add <code>--stop</code>.</p>
+<p>Dev versions and previews get their own empty database, and your release
+command sets it up.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/postgres-and-redis/"><span>Previous</span>Postgres and Redis</a><a class="next" href="/docs/migrations/"><span>Next</span>Migrations</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>

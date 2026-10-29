@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploying an app · Berth docs</title>
+<meta name="description" content="This adds a webhook to the repo, gives the app its hostnames and deploys main.">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/" aria-current="page">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="deploying-an-app">Deploying an app</h1>
+      <pre><code class="language-bash">berth create myapp --repo you/myapp
+</code></pre>
+<p>This adds a webhook to the repo, gives the app its hostnames and deploys
+<code>main</code>. From then on, every push to <code>main</code> deploys.</p>
+<pre><code>-----&gt; Registered webhook on github.com/you/myapp
+-----&gt; https://myapp.example.com
+-----&gt; https://myapp.your-mac.local
+-----&gt; Fetching you/myapp (main)
+-----&gt; Building myapp v1 from main@a1b2c3d (detected node)
+-----&gt; Built berth/myapp:1 in 21s
+-----&gt; Starting berth-myapp-1-x7k2 on 127.0.0.1:8001
+-----&gt; Healthy in 1.0s (HTTP 200)
+
+myapp is live at https://myapp.example.com
+</code></pre>
+<h2 id="what-your-app-must-do">What your app must do</h2>
+<p>The same four rules as Heroku and Dokku, so anything written for them (or by
+an agent that knows them) just works:</p>
+<ol>
+<li>Listen on <code>$PORT</code> (8080 unless you change it) on <code>0.0.0.0</code>.</li>
+<li>Read its configuration from environment variables.</li>
+<li>Only write to <code>/tmp</code> or a <a href="/docs/persistent-storage/">mounted folder</a>. Everything
+else is wiped on each deploy.</li>
+<li>Log to stdout and stderr.</li>
+</ol>
+<h2 id="dockerfiles-or-not">Dockerfiles (or not)</h2>
+<p>If there's a <code>Dockerfile</code> (or <code>Containerfile</code>) at the root of the repo, Berth
+builds it. If it's somewhere else:
+<code>berth config:set myapp BERTH_DOCKERFILE=deploy/Dockerfile</code>.</p>
+<p>Otherwise Berth works out the stack and writes one for you:</p>
+<table>
+<thead>
+<tr>
+<th>Found in the repo</th>
+<th>Stack</th>
+<th>Starts with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bun.lock</code> / <code>bun.lockb</code></td>
+<td>Bun</td>
+<td><code>bun run start</code>, or your entry file</td>
+</tr>
+<tr>
+<td><code>package.json</code></td>
+<td>Node (npm, pnpm or yarn by lockfile; version from <code>engines.node</code>)</td>
+<td>the <code>start</code> script, or <code>server.js</code> / <code>index.js</code></td>
+</tr>
+<tr>
+<td><code>pyproject.toml</code> / <code>requirements.txt</code></td>
+<td>Python, installed with uv</td>
+<td>uvicorn, gunicorn or <code>flask run</code> for FastAPI/Flask/Starlette; gunicorn for Django; else <code>python main.py</code></td>
+</tr>
+<tr>
+<td><code>go.mod</code></td>
+<td>Go (multi-stage, small Alpine image)</td>
+<td>the binary from <code>.</code> or <code>./cmd/&lt;name&gt;</code></td>
+</tr>
+<tr>
+<td><code>Cargo.toml</code></td>
+<td>Rust (multi-stage)</td>
+<td>the package's binary</td>
+</tr>
+<tr>
+<td><code>index.html</code></td>
+<td>Static site, served by Caddy</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>A <code>build</code> script in <code>package.json</code> runs during the build. To see what Berth
+generates, or take it over:</p>
+<pre><code class="language-bash">berth dockerfile myapp &gt; Dockerfile    # commit it and edit as you like
+</code></pre>
+<h2 id="branches-staging-and-monorepos">Branches, staging and monorepos</h2>
+<pre><code class="language-bash">berth create myapp-staging --repo you/myapp --branch staging     # another app for another branch
+berth create api --repo you/mono --path services/api             # build from a subfolder
+</code></pre>
+<p>A monorepo app only deploys when a push touches files under its path.</p>
+<p>To point an existing app at a different repo or branch (say you started from a
+local folder and have now pushed it to GitHub):</p>
+<pre><code class="language-bash">berth app:set-repo myapp you/myapp [--branch main]
+</code></pre>
+<p>Config, databases, sign-in and release history all stay put. Berth moves the
+webhook over and only redeploys if the branch is ahead of what's live.</p>
+<h2 id="how-deploys-get-triggered">How deploys get triggered</h2>
+<table>
+<thead>
+<tr>
+<th>Trigger</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>GitHub webhook</strong></td>
+<td>Pushes deploy within seconds. <code>berth create</code> sets it up if you have a tunnel and a GitHub login.</td>
+</tr>
+<tr>
+<td><strong>Polling</strong></td>
+<td>Every 60 seconds Berth checks the branch. Always on, so it catches missed webhooks, <code>--no-webhook</code>, <code>--no-tunnel</code> and repos that aren't on GitHub.</td>
+</tr>
+<tr>
+<td><strong><code>git push berth main</code></strong></td>
+<td>Push straight to the Mac over SSH, Dokku-style, and watch the build in your terminal.</td>
+</tr>
+<tr>
+<td><strong><code>berth deploy myapp</code></strong></td>
+<td>Deploy right now. `--ref &lt;sha</td>
+</tr>
+</tbody>
+</table>
+<p><code>--repo</code> also takes any git URL (<code>https://gitlab.com/you/app.git</code>) or a local
+path. Or leave it out for an app you only ever push to:</p>
+<pre><code class="language-bash">berth create myapp                 # no repo
+cd ~/code/myapp &amp;&amp; berth git:remote myapp
+git push berth main
+</code></pre>
+<p><code>git push berth</code> needs <strong>Remote Login</strong> turned on on the Mac (System
+Settings → General → Sharing).</p>
+<h2 id="private-repos">Private repos</h2>
+<p>The GitHub login from <code>init</code> covers private repos. If you'd rather use a
+read-only SSH deploy key for a particular repo:</p>
+<pre><code class="language-bash">berth app:set-key myapp     # makes a key and adds it to the repo (or prints it for you to add)
+</code></pre>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/starting-a-new-app/"><span>Previous</span>Starting a new app</a><a class="next" href="/docs/releases-and-rollbacks/"><span>Next</span>Releases and rollbacks</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#what-your-app-must-do">What your app must do</a></li>
+      <li><a href="#dockerfiles-or-not">Dockerfiles (or not)</a></li>
+      <li><a href="#branches-staging-and-monorepos">Branches, staging and monorepos</a></li>
+      <li><a href="#how-deploys-get-triggered">How deploys get triggered</a></li>
+      <li><a href="#private-repos">Private repos</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in a closet.</p>
+</footer>
+</body>
+</html>
