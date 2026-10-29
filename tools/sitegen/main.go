@@ -7,12 +7,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -191,6 +194,21 @@ func run(readme, out, base, repo string) error {
 		return fmt.Errorf("links that go nowhere:\n  %s", strings.Join(bad, "\n  "))
 	}
 
+	stamp, err := assetStamper(out)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"index.html", "404.html"} {
+		f := filepath.Join(out, name)
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(f, stamp(b), 0o644); err != nil {
+			return err
+		}
+	}
+
 	tmpl, err := template.New("page").Parse(pageHTML)
 	if err != nil {
 		return err
@@ -225,7 +243,7 @@ func run(readme, out, base, repo string) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, "index.html"), b.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), stamp(b.Bytes()), 0o644); err != nil {
 			return err
 		}
 	}
@@ -238,6 +256,28 @@ func run(readme, out, base, repo string) error {
 	}
 	sm.WriteString("</urlset>\n")
 	return os.WriteFile(filepath.Join(out, "sitemap.xml"), []byte(sm.String()), 0o644)
+}
+
+// assetStamper returns a function that adds ?v=<hash of the file> to links
+// to the stylesheet and script, so a change to either gets a new URL and
+// Cloudflare's cached copy of the old one is never served with a new page.
+func assetStamper(out string) (func([]byte) []byte, error) {
+	hashes := map[string]string{}
+	for _, name := range []string{"site.css", "site.js"} {
+		b, err := os.ReadFile(filepath.Join(out, "assets", name))
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(b)
+		hashes[name] = hex.EncodeToString(sum[:5])
+	}
+	re := regexp.MustCompile(`/assets/(site\.(?:css|js))(?:\?v=[0-9a-f]*)?"`)
+	return func(b []byte) []byte {
+		return re.ReplaceAllFunc(b, func(m []byte) []byte {
+			name := string(re.FindSubmatch(m)[1])
+			return []byte("/assets/" + name + "?v=" + hashes[name] + `"`)
+		})
+	}, nil
 }
 
 // navigation reads the README's Contents section: paragraphs that start

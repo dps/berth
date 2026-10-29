@@ -1500,7 +1500,9 @@ The website, [berth.computer](https://berth.computer), lives in `site/` and is
 itself a Berth app (`berth create site --repo dps/berth --path site`). Its
 docs are this README, one page per `##` section with the sidebar taken from
 the Contents list, so after editing the README run `make site` and commit
-what it writes. The release script checks they match.
+what it writes. Do the same after changing `site.css` or `site.js`: their
+links carry a hash of the file, so Cloudflare never serves an old copy with
+a new page. The release script checks it's all up to date.
 
 ## License
 

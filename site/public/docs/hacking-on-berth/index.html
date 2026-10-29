@@ -6,8 +6,8 @@
 <title>Hacking on Berth · Berth docs</title>
 <meta name="description" content="The S3 client has a test against a real S3-compatible server.">
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/assets/site.css">
-<script src="/assets/site.js" defer></script>
+<link rel="stylesheet" href="/assets/site.css?v=f0f6203c87">
+<script src="/assets/site.js?v=7a45726c56" defer></script>
 </head>
 <body class="docs">
 
@@ -108,7 +108,9 @@ and points the Homebrew formula at the new tarball.</p>
 itself a Berth app (<code>berth create site --repo dps/berth --path site</code>). Its
 docs are this README, one page per <code>##</code> section with the sidebar taken from
 the Contents list, so after editing the README run <code>make site</code> and commit
-what it writes. The release script checks they match.</p>
+what it writes. Do the same after changing <code>site.css</code> or <code>site.js</code>: their
+links carry a hash of the file, so Cloudflare never serves an old copy with
+a new page. The release script checks it's all up to date.</p>
 
     </article>
     <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/how-it-works/"><span>Previous</span>How it works</a><a class="next" href="/docs/license/"><span>Next</span>License</a>
