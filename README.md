@@ -1405,7 +1405,7 @@ the work. Each README lists the `berth` commands to deploy it.
 
 | Repo | Stack | Shows |
 | --- | --- | --- |
-| [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, storage, a worker, cron jobs, crash recovery |
+| [berth_hello_python](https://github.com/dps/berth_hello_python) | FastAPI | config, Postgres, Redis, SQLite, storage, a worker, cron jobs, crash recovery |
 | [berth_chirp_node](https://github.com/dps/berth_chirp_node) | Express + React (Vite) | a little Twitter clone with Google sign-in, migrations and an AI summary of the timeline |
 | [berth_hello_go](https://github.com/dps/berth_hello_go) | Go standard library | a static binary on Alpine |
 | [berth_hello_rust](https://github.com/dps/berth_hello_rust) | Rust + axum | cached dependency builds (4 second redeploys) |
