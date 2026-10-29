@@ -517,9 +517,9 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 }
 
 /* The Mac mini (Apple_Mac_Mini_M4.svg by LoMit on Wikimedia Commons, CC0),
-   with the deploy terminal sitting in front of it. */
+   with the deploy terminal below it. */
 .hero-art { position: relative; }
-.hero-art .mini { position: relative; width: 86%; margin: 0 0 0 auto; }
+.hero-art .mini { position: relative; width: 84%; margin: 0 auto; }
 .hero-art .mini > img { display: block; width: 100%; height: auto; }
 
 /* The Berth logo stuck on the front of the Mac, slightly crooked, with its
@@ -543,11 +543,11 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 
 .sticker {
   position: absolute;
-  left: 58%;
-  top: 34%;
-  width: 10.5%;
+  left: 50%;
+  top: 37%;
+  width: 13%;
   aspect-ratio: 1;
-  transform: rotate(-4deg);
+  transform: translateX(-50%) rotate(-4deg);
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
 }
 .sticker > span {
@@ -570,7 +570,7 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
   border-bottom-left-radius: 30%;
   filter: drop-shadow(-1px 1px 1px rgba(0, 0, 0, 0.2));
 }
-.hero-art .terminal { position: relative; width: 94%; margin-top: -13%; }
+.hero-art .terminal { margin-top: 28px; }
 
 /* "You're looking at a Berth app", at the top of the landing page. */
 .here.top-here { margin: 36px 0 0; padding: 20px 26px; gap: 20px; border-radius: 14px; }
@@ -580,7 +580,7 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 
 @media (max-width: 860px) {
   .hero-art .mini { width: 78%; margin: 0 auto; }
-  .hero-art .terminal { width: 100%; margin-top: -8.5%; }
+  .hero-art .terminal { margin-top: 20px; }
 }
 @media (max-width: 560px) {
   .here.top-here { grid-template-columns: auto minmax(0, 1fr); padding: 16px 18px; gap: 14px; }
