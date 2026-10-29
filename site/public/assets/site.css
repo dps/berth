@@ -143,7 +143,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.88em; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
   gap: 48px;
   align-items: center;
-  padding: 56px 0 72px;
+  padding: 32px 0 72px;
 }
 .eyebrow {
   margin: 0 0 16px;
@@ -461,7 +461,7 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 }
 
 @media (max-width: 860px) {
-  .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 56px 0 48px; }
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 28px 0 48px; }
   .install, .isnt { grid-template-columns: minmax(0, 1fr); gap: 28px; }
   .features { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .flow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 8px; }
@@ -523,7 +523,7 @@ section.band { padding: 72px 0; border-top: 1px solid var(--line); }
 .hero-art .terminal { position: relative; width: 94%; margin-top: -22%; }
 
 /* "You're looking at a Berth app", at the top of the landing page. */
-.here.top-here { margin: 24px 0 0; padding: 20px 26px; gap: 20px; border-radius: 14px; }
+.here.top-here { margin: 36px 0 0; padding: 20px 26px; gap: 20px; border-radius: 14px; }
 .here.top-here img { width: 52px; height: 52px; border-radius: 12px; }
 .here.top-here h2 { margin: 0 0 4px; font-size: 21px; }
 .here.top-here p { font-size: 15.5px; }
