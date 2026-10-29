@@ -64,6 +64,7 @@ real money.
 
 **Data and background work:**
 [Postgres and Redis](#postgres-and-redis) ·
+[SQLite](#sqlite) ·
 [Migrations](#migrations) ·
 [Workers and scheduled jobs](#workers-and-scheduled-jobs) ·
 [Persistent storage](#persistent-storage)
@@ -477,6 +478,51 @@ berth redis:restore cache ~/.berth/backups/redis/cache/<time>.rdb
 `pg:create` and `redis:create` take `--memory` (`512M` and `256M` by default)
 and `--image` (`--image postgres:16`, for example).
 
+## SQLite
+
+If your app wants a SQLite file rather than a database server, give it one:
+
+```bash
+berth sqlite:add myapp
+```
+
+The app now has `DATABASE_URL=sqlite:////data/sqlite/app.db`, and
+`SQLITE_PATH=/data/sqlite/app.db` for libraries that want a plain path. If
+`DATABASE_URL` is already taken, pick another name with `--as SQLITE_URL`.
+
+```bash
+berth sqlite:shell myapp                        # sqlite3, inside the app
+berth sqlite:shell myapp "select count(*) from notes"
+berth sqlite:backup myapp                       # → ~/.berth/backups/sqlite/myapp/<time>.db
+berth sqlite:restore myapp ~/.berth/backups/sqlite/myapp/20261028-030000.db
+berth sqlite:list
+berth sqlite:remove myapp                       # the data stays unless you add --delete-data
+```
+
+The file lives on a disk image that only one container can attach at a time.
+That matters because every Berth container is its own little VM, and
+SQLite's locks don't reach from one VM into another. Two containers sharing
+a SQLite file in an ordinary folder can both write at once and corrupt it. So
+an app with SQLite runs one container at a time:
+
+- **Deploys stop the old version before starting the new one.** Visitors
+  wait a few seconds rather than getting an error. If the new version doesn't
+  come up, the old one starts again.
+- **Scheduled jobs and `berth run` happen inside the running app**, not in a
+  new container.
+- **Workers can use the database too**: they run inside the app's
+  container, like every app's [workers](#workers).
+
+**It's backed up every night** along with Postgres, and before every release
+command. Each backup is one ordinary SQLite file in
+`~/.berth/backups/sqlite/`, checked on the Mac before it's kept. Backups
+happen while the app keeps running, as long as its image has `sqlite3` or
+Python (most do). If it has neither, the nightly backup stops the app for a
+few seconds instead, and `sqlite:backup` asks you to add `--stop`.
+
+Dev versions and previews get their own empty database, and your release
+command sets it up.
+
 ## Migrations
 
 Tell Berth how your app migrates its database and it'll run that once per
@@ -583,11 +629,13 @@ worker: node worker.js
 clock: node clock.js
 ```
 
-Anything other than `web` and `release` is a worker. Each one runs in its own
-container from the same build and config, with no URL, and gets restarted
-(with backoff) if it exits. Workers move to each new release as it goes live,
-follow rollbacks, and stop and start with the app. The old release's workers
-stop before the new ones start, so a job never gets picked up twice. You
+Anything other than `web` and `release` is a worker. Each one runs as
+another process inside the app's container, with the same build, config and
+storage, and gets restarted (with backoff) if it exits. Workers move to each
+new release as it goes live, follow rollbacks, and stop and start with the
+app. The old release's workers stop before the new ones start, so a job never
+gets picked up twice. Each knows its name from `BERTH_PROCESS` (`worker.2`).
+You
 still need a web process, and it's always the image's own command: Berth
 doesn't read the `web:` line, so it's fine to keep it for other tools.
 
@@ -598,8 +646,9 @@ berth status myapp                 # each worker and how long it's been up
 berth logs myapp -f                # worker lines say which: v4 worker.2: …
 ```
 
-Each worker uses memory like an app does (`BERTH_MEMORY`), so keep an eye on
-the total in `berth status`.
+Workers share the app's memory and CPUs, so if they're heavy, give the app
+more with `BERTH_MEMORY` and `BERTH_CPUS`. The image needs `/bin/sh`, `tr`
+and `grep`, which every common base image has.
 
 ### Scheduled jobs
 
@@ -640,17 +689,21 @@ of production's data could email real people. Try one by hand with
 
 ## Persistent storage
 
-Containers start clean on every deploy. For SQLite files, uploads or caches,
-mount a folder that sticks around:
+Containers start clean on every deploy. For uploads, generated files or
+caches, mount a folder that sticks around:
 
 ```bash
-berth storage:mount myapp /data         # then e.g. DATABASE_PATH=/data/app.db
+berth storage:mount myapp /uploads
 berth storage:list myapp
-berth storage:unmount myapp /data       # stops mounting it; the files stay
+berth storage:unmount myapp /uploads    # stops mounting it; the files stay
 ```
 
-The folder is `~/.berth/data/apps/myapp/data/` on the Mac: a plain folder
+The folder is `~/.berth/data/apps/myapp/uploads/` on the Mac: a plain folder
 that Time Machine and `berth backup` both pick up.
+
+Don't keep a SQLite database in one of these; use
+[`berth sqlite:add`](#sqlite). A database in a shared folder can be corrupted
+when two containers write at once, which happens on every deploy.
 
 ## Domains, LAN URLs and passwords
 
@@ -1013,6 +1066,9 @@ A live web page showing everything on your Berth, for the people in the
 - **Overview:** whether everything's up (containers, proxy, tunnel, disk,
   memory, AI), warnings, traffic and latency across all apps for the last day,
   every app at a glance, your databases, and recent deploys and crashes.
+- **System load:** the Mac's load average, CPU, memory in use and swap,
+  charted over the last hour or day, and how much CPU each app and database
+  is using. It samples every 15 seconds and keeps a day.
 - **Each app:** requests, visitors, errors and latency for the last hour, day
   or week compared with the one before, with charts; top pages, referrers,
   countries and browsers; requests as they arrive; releases, output and setup.
@@ -1117,7 +1173,7 @@ which sends the laptop's `.env`. Any other path you pass, as in
 
 ## Backups and moving to a new Mac
 
-Database dumps happen every night on their own ([above](#postgres-and-redis)).
+Database backups happen every night on their own ([Postgres](#postgres-and-redis), [SQLite](#sqlite)).
 For everything else there's one archive:
 
 ```bash
@@ -1126,7 +1182,7 @@ berth backup /Volumes/USB/berth.tar.gz
 ```
 
 It holds everything needed to rebuild: app settings and config, release
-history, fresh database dumps and your storage folders. It leaves out
+history, fresh database backups and your storage folders. It leaves out
 anything that can be fetched or rebuilt again (git mirrors, images, logs). It
 has your secrets in it, so keep it somewhere safe.
 
@@ -1138,8 +1194,8 @@ berth restore berth-backup.tar.gz
 ```
 
 Everything comes back: each app's settings, config, domains, access rules,
-workers and AI access; sign-in groups and sessions; Postgres and Redis from
-their dumps; storage folders; and the GitHub, Cloudflare and Google logins.
+workers and AI access; sign-in groups and sessions; Postgres, Redis and
+SQLite from their backups; storage folders; and the GitHub, Cloudflare and Google logins.
 Every app is redeployed from its repo at the commit that was live. A few
 things come back lazily: apps without a repo come back with their settings
 (push to them to deploy), dev versions on their next `dev:push`, previews
@@ -1264,11 +1320,12 @@ agents want. `berth <command> --help` has more on each.
 | `berth status [app]` | overview, or one app |
 | `berth events [-f]` | event log |
 | **Running things** | |
-| `berth run <app> <cmd…>` | one-off command in a fresh container |
+| `berth run <app> <cmd…>` | one-off command in a fresh container (inside the running one, for apps with SQLite) |
 | `berth exec <app> [cmd…]` | command or shell in the running container |
 | **Data** | |
 | `berth pg:create \| link \| unlink \| psql \| backup \| restore \| expose \| upgrade \| destroy \| list` | Postgres |
 | `berth redis:create \| link \| unlink \| cli \| backup \| restore \| expose \| destroy \| list` | Redis |
+| `berth sqlite:add \| remove \| shell \| backup \| restore <app>` · `sqlite:list` | an app's own SQLite database |
 | `berth storage:mount \| unmount \| list <app> [path]` | persistent folders |
 | **Hostnames and access** | |
 | `berth domains:add \| remove \| list <app> [host] [--force]` | custom domains |
@@ -1389,7 +1446,7 @@ All the state is plain files you can read:
   apps/<app>/logs/         app.log, build-<n>.log, release-<n>.log, cron.log, access.<created>.log
   apps/<app>/cron.json     each scheduled job's last run
   services/<kind>/<name>/  database settings
-  backups/                 database dumps
+  backups/                 database dumps and SQLite backups
   data/apps/<app>/         storage:mount folders
   secrets/                 tokens and tunnel credentials (mode 0700)
   logs/                    berthd, Caddy and cloudflared logs

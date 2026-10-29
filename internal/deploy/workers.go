@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,7 +39,7 @@ func readProcesses(dir string, rel *state.Release, out io.Writer) error {
 	return nil
 }
 
-// oneOffOpts is how release commands, workers and cron jobs run: the
+// oneOffOpts is how release commands and cron jobs run: the
 // release's image, config and mounts, no published port.
 func (d *Deployer) oneOffOpts(app *state.App, cfg *state.Config, rel *state.Release, env state.Env, role string) (runtime.RunOpts, error) {
 	envFile := d.Store.Path("apps", app.Name, "releases", fmt.Sprintf("%d.env", rel.N))
@@ -48,12 +47,9 @@ func (d *Deployer) oneOffOpts(app *state.App, cfg *state.Config, rel *state.Rele
 	if err := state.WriteFile(envFile, []byte(file), 0o600); err != nil {
 		return runtime.RunOpts{}, err
 	}
-	var vols []string
-	for _, m := range app.Mounts {
-		if err := os.MkdirAll(m.Source, 0o755); err != nil {
-			return runtime.RunOpts{}, err
-		}
-		vols = append(vols, m.Source+":"+m.Path)
+	vols, err := volumes(app)
+	if err != nil {
+		return runtime.RunOpts{}, err
 	}
 	return runtime.RunOpts{
 		Image:   rel.Image,
@@ -68,70 +64,19 @@ func (d *Deployer) oneOffOpts(app *state.App, cfg *state.Config, rel *state.Rele
 	}, nil
 }
 
-func (d *Deployer) runWorker(ctx context.Context, app *state.App, cfg *state.Config, rel *state.Release, env state.Env, typ string, idx int) (state.Worker, error) {
-	w := state.Worker{Type: typ, Index: idx}
-	opts, err := d.oneOffOpts(app, cfg, rel, env, "worker")
-	if err != nil {
-		return w, err
-	}
-	w.Container = fmt.Sprintf("%s-%s%d-%s", state.ContainerName(app.Name, rel.N), typ, idx, strconv.FormatInt(time.Now().UnixMilli()%1_000_000, 36))
-	opts.Name = w.Container
-	opts.Labels["dev.berth.process"] = w.Name()
-	opts.Entrypoint, opts.Args = "/bin/sh", []string{"-c", rel.Processes[typ]}
-	opts.Detach = true
-	d.RT.Remove(ctx, w.Container)
-	return w, d.RT.Run(ctx, opts)
-}
-
-// startWorkers runs rel's worker processes at the app's scale. The web
-// process is already live, so a worker that won't start is reported but
-// doesn't fail the deploy; the supervisor keeps restarting it.
-func (d *Deployer) startWorkers(ctx context.Context, app *state.App, cfg *state.Config, rel *state.Release, env state.Env, out io.Writer) {
-	types := make([]string, 0, len(rel.Processes))
-	for t := range rel.Processes {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-	var started []string
-	for _, t := range types {
-		for i := 1; i <= app.WorkerCount(t); i++ {
-			w, err := d.runWorker(ctx, app, cfg, rel, env, t, i)
-			if err != nil {
-				detail(out, "warning: %s didn't start: %v", w.Name(), err)
-				continue
-			}
-			rel.Workers = append(rel.Workers, w)
-			started = append(started, w.Name())
-		}
-	}
-	if len(started) == 0 {
-		return
-	}
-	d.Store.SaveRelease(app.Name, rel)
-	say(out, "Started %s", strings.Join(started, ", "))
-	// A worker that exits straight away has a config or code problem worth
-	// showing now rather than only in the logs.
-	time.Sleep(workerSettle)
-	cs, err := d.RT.List(ctx)
-	if err != nil {
-		return
-	}
-	for _, w := range rel.Workers {
-		if c, ok := runtime.Find(cs, w.Container); !ok || !c.Running() {
-			detail(out, "warning: %s exited right after starting; Berth will keep restarting it. Its last lines:", w.Name())
-			if logs := d.lastLogs(ctx, w.Container, 20); logs != "" {
-				fmt.Fprint(out, indentString(logs))
-			}
-		}
+// workers puts the app's Procfile workers in its live web container, or
+// stops them when it has none (berthd's Workers hook, design.md, Workers
+// and cron). out gets what started, and any worker that exited straight
+// away.
+func (d *Deployer) workers(ctx context.Context, appName string, out io.Writer) {
+	if d.Workers != nil {
+		d.Workers(ctx, appName, out)
 	}
 }
 
-// workerSettle is how long startWorkers waits before checking that
-// workers are still running.
-var workerSettle = 3 * time.Second
-
-// stopWorkers stops and removes rel's worker containers.
-func (d *Deployer) stopWorkers(ctx context.Context, appName string, rel *state.Release, out io.Writer) {
+// RemoveWorkerContainers stops and removes the worker containers an older
+// Berth ran for rel (workers now run inside the web container).
+func (d *Deployer) RemoveWorkerContainers(ctx context.Context, appName string, rel *state.Release) {
 	if len(rel.Workers) == 0 {
 		return
 	}
@@ -139,56 +84,16 @@ func (d *Deployer) stopWorkers(ctx context.Context, appName string, rel *state.R
 		d.RT.Stop(ctx, w.Container, 10*time.Second)
 		d.RT.Remove(ctx, w.Container)
 	}
-	if out != nil && rel.N != 0 {
-		say(out, "Stopped v%d's workers", rel.N)
-	}
 	rel.Workers = nil
 	d.Store.SaveRelease(appName, rel)
 }
 
-// RecoverWorker restarts one worker of the current release (the
-// supervisor's crash restart).
-func (d *Deployer) RecoverWorker(ctx context.Context, appName, name string) error {
-	unlock := d.Lock(appName)
-	defer unlock()
-	app, err := d.Store.App(appName)
-	if err != nil || app.Stopped {
-		return err
-	}
-	cfg, err := d.Store.Config()
-	if err != nil {
-		return err
-	}
-	rel := d.Store.CurrentRelease(appName)
-	if rel == nil {
-		return nil
-	}
-	env, _ := d.Store.Env(appName)
-	for i, w := range rel.Workers {
-		if w.Name() != name {
-			continue
-		}
-		d.RT.Remove(ctx, w.Container)
-		nw, err := d.runWorker(ctx, app, cfg, rel, env, w.Type, w.Index)
-		if err != nil {
-			return err
-		}
-		rel.Workers[i] = nw
-		return d.Store.SaveRelease(appName, rel)
-	}
-	return nil
-}
-
-// Scale sets how many containers run for a process type of the current
-// release, starting or stopping workers to match.
+// Scale sets how many of a process type of the current release run,
+// starting or stopping workers to match.
 func (d *Deployer) Scale(ctx context.Context, appName, typ string, n int, out io.Writer) error {
 	unlock := d.Lock(appName)
 	defer unlock()
 	app, err := d.Store.App(appName)
-	if err != nil {
-		return err
-	}
-	cfg, err := d.Store.Config()
 	if err != nil {
 		return err
 	}
@@ -221,30 +126,6 @@ func (d *Deployer) Scale(ctx context.Context, appName, typ string, n int, out io
 		say(out, "%s will run %d %s when it starts", appName, n, typ)
 		return nil
 	}
-	env, _ := d.Store.Env(appName)
-	var keep []state.Worker
-	have := 0
-	for _, w := range rel.Workers {
-		if w.Type == typ && w.Index > n {
-			d.RT.Stop(ctx, w.Container, 10*time.Second)
-			d.RT.Remove(ctx, w.Container)
-			say(out, "Stopped %s", w.Name())
-			continue
-		}
-		if w.Type == typ {
-			have = max(have, w.Index)
-		}
-		keep = append(keep, w)
-	}
-	rel.Workers = keep
-	for i := have + 1; i <= n; i++ {
-		w, err := d.runWorker(ctx, app, cfg, rel, env, typ, i)
-		if err != nil {
-			d.Store.SaveRelease(appName, rel)
-			return fmt.Errorf("%s didn't start: %w", w.Name(), err)
-		}
-		rel.Workers = append(rel.Workers, w)
-		say(out, "Started %s", w.Name())
-	}
-	return d.Store.SaveRelease(appName, rel)
+	d.workers(ctx, appName, out)
+	return nil
 }

@@ -64,6 +64,7 @@ func (d *Daemon) offsiteRun(ctx context.Context, dump bool, trigger string, out 
 			}
 			fmt.Fprintf(out, "-----> Dumped %s:%s → %s\n", sv.Kind, sv.Name, filepath.Base(path))
 		}
+		d.backupAllSQLite(ctx, false, out)
 	}
 	dir := d.Store.Path("backups", "offsite")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

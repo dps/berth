@@ -161,10 +161,12 @@ export function bars(container, { points, series, fmtX, fmtWhen, fmtY, empty = "
   svg.addEventListener("pointerleave", leave);
 }
 
-// lines draws one line per series, with gaps where a point has no value.
-export function lines(container, { points, series, fmtX, fmtWhen, fmtY, empty = "No requests in this period" }) {
+// lines draws one line per series, with gaps where a point has no value
+// (or a zero, unless zeroIsGap is false). yMax fixes the top of the scale.
+export function lines(container, { points, series, fmtX, fmtWhen, fmtY, empty = "No requests in this period", zeroIsGap = true, yMax }) {
+  const has = (p, k) => p?.[k] != null && (!zeroIsGap || p[k] !== 0);
   const vals = points.flatMap((p) => series.map((se) => p[se.key] || 0));
-  const { max, ticks } = scale(Math.max(...vals, 0));
+  const { max, ticks } = scale(yMax ?? Math.max(...vals, 0));
   const n = points.length;
   const pre = frame(container, { yTicks: ticks, fmtY, xLabels: [] });
   const step = pre.iw / Math.max(1, n - 1);
@@ -176,19 +178,19 @@ export function lines(container, { points, series, fmtX, fmtWhen, fmtY, empty = 
     let d = "", pen = false;
     points.forEach((p, i) => {
       const v = p[se.key];
-      if (!v) { pen = false; return; }
+      if (!has(p, se.key)) { pen = false; return; }
       d += (pen ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1);
       pen = true;
     });
     el("path", { d, class: "line " + se.cls }, svg);
     // Isolated points (a gap on both sides) need a dot to be seen.
     points.forEach((p, i) => {
-      if (p[se.key] && !points[i - 1]?.[se.key] && !points[i + 1]?.[se.key]) el("circle", { cx: x(i), cy: y(p[se.key]), r: 3, class: "dot " + se.cls }, svg);
+      if (has(p, se.key) && !has(points[i - 1], se.key) && !has(points[i + 1], se.key)) el("circle", { cx: x(i), cy: y(p[se.key]), r: 3, class: "dot " + se.cls }, svg);
     });
   }
   const cross = el("line", { y1: m.t, y2: m.t + ih, class: "crosshair hidden" }, svg);
   const dots = series.map((se) => el("circle", { r: 4, class: "dot ring hidden " + se.cls }, svg));
-  noData(container, vals.some((v) => v > 0) ? "" : empty);
+  noData(container, points.some((p) => series.some((se) => has(p, se.key))) ? "" : empty);
   svg.addEventListener("pointermove", (e) => {
     const r = svg.getBoundingClientRect();
     const i = Math.round((e.clientX - r.left - m.l) / step);
@@ -198,13 +200,13 @@ export function lines(container, { points, series, fmtX, fmtWhen, fmtY, empty = 
     cross.classList.remove("hidden");
     series.forEach((se, k) => {
       const v = points[i][se.key];
-      if (v) {
+      if (has(points[i], se.key)) {
         dots[k].setAttribute("cx", x(i));
         dots[k].setAttribute("cy", y(v));
         dots[k].classList.remove("hidden");
       } else dots[k].classList.add("hidden");
     });
-    showTip(e, fmtWhen(points[i].t), series.map((se) => ({ label: se.label, value: points[i][se.key] ? fmtY(points[i][se.key]) : "–", color: se.color })));
+    showTip(e, fmtWhen(points[i].t), series.map((se) => ({ label: se.label, value: has(points[i], se.key) ? fmtY(points[i][se.key]) : "–", color: se.color })));
   });
   const leave = () => { cross.classList.add("hidden"); dots.forEach((d) => d.classList.add("hidden")); hideTip(); };
   svg.addEventListener("pointerleave", leave);

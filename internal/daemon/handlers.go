@@ -88,6 +88,11 @@ func (d *Daemon) handlers() map[string]handler {
 		"svc.restore":     d.hSvcRestore,
 		"svc.expose":      d.hSvcExpose,
 		"svc.upgrade":     d.hSvcUpgrade,
+		"sqlite.add":      d.hSQLiteAdd,
+		"sqlite.remove":   d.hSQLiteRemove,
+		"sqlite.backup":   d.hSQLiteBackup,
+		"sqlite.restore":  d.hSQLiteRestore,
+		"sqlite.list":     d.hSQLiteList,
 		"status":          d.hStatus,
 		"gc":              d.hGC,
 		"backup":          d.hBackup,
@@ -467,6 +472,14 @@ func (d *Daemon) destroyApp(ctx context.Context, app *state.App, keepData bool, 
 		os.RemoveAll(d.Store.Path("data", "apps", app.Name))
 	} else if len(app.Mounts) > 0 {
 		fmt.Fprintf(out, "-----> Kept data in %s\n", d.Store.Path("data", "apps", app.Name))
+	}
+	if app.SQLite != nil {
+		switch {
+		case keepData:
+			fmt.Fprintf(out, "-----> Kept the SQLite database on the volume %s\n", app.SQLite.Volume)
+		case d.RT.VolumeRemove(ctx, app.SQLite.Volume) == nil:
+			fmt.Fprintf(out, "-----> Deleted the SQLite volume %s\n", app.SQLite.Volume)
+		}
 	}
 	d.mu.Lock()
 	delete(d.crash, app.Name)

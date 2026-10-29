@@ -179,8 +179,8 @@ func (d *Daemon) supervise(ctx context.Context) {
 	apps, _ := d.Store.Apps()
 	for _, a := range apps {
 		d.superviseApp(ctx, a, cs)
-		d.superviseWorkers(ctx, a, cs)
 	}
+	d.syncAllWorkers(ctx, apps, cs)
 	d.syncTails(ctx, cs)
 	d.checkNetwork(ctx)
 	if d.mdns != nil {
@@ -249,60 +249,6 @@ func (d *Daemon) superviseApp(ctx context.Context, a *state.App, cs []runtime.Co
 		st.container = r.Container
 	}
 	st.healthy = time.Now()
-}
-
-// superviseWorkers restarts the current release's workers that have
-// stopped, with the same backoff and give-up rule as the web process.
-func (d *Daemon) superviseWorkers(ctx context.Context, a *state.App, cs []runtime.Container) {
-	if a.Stopped || d.Deployer.Busy(a.Name) {
-		return
-	}
-	rel := d.Store.CurrentRelease(a.Name)
-	if rel == nil {
-		return
-	}
-	for _, w := range rel.Workers {
-		key := a.Name + "/" + w.Name()
-		d.mu.Lock()
-		st, ok := d.crash[key]
-		if !ok {
-			st = &crashState{}
-			d.crash[key] = st
-		}
-		d.mu.Unlock()
-		if c, ok := runtime.Find(cs, w.Container); ok && c.Running() {
-			if st.container != w.Container {
-				*st = crashState{container: w.Container, healthy: time.Now()}
-			}
-			if st.failures > 0 && time.Since(st.healthy) > crashResetAfter {
-				st.failures = 0
-			}
-			continue
-		}
-		if st.gaveUp || time.Now().Before(st.next) {
-			continue
-		}
-		st.failures++
-		if st.failures > maxCrashFailures {
-			st.gaveUp = true
-			d.event(state.Event{Kind: "crash.loop", App: a.Name, Message: fmt.Sprintf("%s (v%d) exited %d times in a row; Berth stopped restarting it until the next deploy or `berth restart %s` (see `berth logs %s`)", w.Name(), rel.N, maxCrashFailures, a.Name, a.Name)})
-			continue
-		}
-		d.event(state.Event{Kind: "crash", App: a.Name, Message: fmt.Sprintf("%s (v%d) is not running; restarting (%d of %d before Berth gives up)", w.Name(), rel.N, st.failures, maxCrashFailures)})
-		st.next = time.Now().Add(d.CrashBackoff(st.failures))
-		if err := d.Deployer.RecoverWorker(ctx, a.Name, w.Name()); err != nil {
-			slog.Warn("worker restart", "app", a.Name, "worker", w.Name(), "err", err)
-			continue
-		}
-		if r := d.Store.CurrentRelease(a.Name); r != nil {
-			for _, nw := range r.Workers {
-				if nw.Name() == w.Name() {
-					st.container = nw.Container
-				}
-			}
-		}
-		st.healthy = time.Now()
-	}
 }
 
 // ---- log tails ----
@@ -642,6 +588,9 @@ func (d *Daemon) scheduleLoop(ctx context.Context) {
 }
 
 func (d *Daemon) nightlyBackups(ctx context.Context, cfg *state.Config) {
+	// At 3 a.m. an app whose image can't back up while it runs may be
+	// stopped for a few seconds.
+	d.backupAllSQLite(ctx, true, io.Discard)
 	svs, _ := d.Store.Services("pg")
 	for _, sv := range svs {
 		path, err := d.Services.Backup(ctx, sv.Kind, sv.Name, cfg.PGBackupKeep)

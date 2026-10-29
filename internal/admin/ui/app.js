@@ -185,11 +185,11 @@ function appColors(names) {
 
 async function overviewPage() {
   markNav("overview");
-  overview = await api("/api/overview");
+  [overview, load] = await Promise.all([api("/api/overview"), fetchLoad()]);
   chrome(overview);
   renderOverview();
   every(10000, async () => {
-    try { overview = await api("/api/overview"); chrome(overview); renderOverview(); } catch {}
+    try { [overview, load] = await Promise.all([api("/api/overview"), fetchLoad()]); chrome(overview); renderOverview(); } catch {}
   });
 }
 
@@ -252,6 +252,8 @@ function renderOverview() {
     ${warnings.length ? `<div class="banner" role="alert">${status("warning", "")}<div><strong>Needs attention</strong><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div></div>` : ""}
     <div class="grid health">${healthTiles(sys, ov.ai)}</div>
 
+    <div class="section" id="load"></div>
+
     <div class="section">
       <h2>Traffic · last 24 hours</h2>
       <div class="grid kpis">
@@ -279,8 +281,8 @@ function renderOverview() {
     <div class="section">
       <h2>Apps <span class="count">${apps.length}</span></h2>
       <div class="card flush"><div class="table-wrap"><table>
-        <thead><tr><th>App</th><th>State</th><th>Release</th><th class="r">Requests 24h</th><th class="hide-sm"></th><th class="r">5xx</th><th class="r">p50</th><th class="r">p95</th><th class="r">Visitors</th><th>Memory</th><th>Up</th></tr></thead>
-        <tbody>${ordered.map((a) => appRow(a, sums[a.name], byName)).join("") || `<tr><td colspan="11" class="empty">No apps yet. <span class="mono">berth create myapp --repo you/myapp</span></td></tr>`}</tbody>
+        <thead><tr><th>App</th><th>State</th><th>Release</th><th class="r">Requests 24h</th><th class="hide-sm"></th><th class="r">5xx</th><th class="r">p50</th><th class="r">p95</th><th class="r">Visitors</th><th class="r">CPU</th><th>Memory</th><th>Up</th></tr></thead>
+        <tbody>${ordered.map((a) => appRow(a, sums[a.name], byName)).join("") || `<tr><td colspan="12" class="empty">No apps yet. <span class="mono">berth create myapp --repo you/myapp</span></td></tr>`}</tbody>
       </table></div></div>
     </div>
 
@@ -288,8 +290,8 @@ function renderOverview() {
       <div class="card flush">
         <h2>Services <span class="count">${services.length}</span></h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>Service</th><th>State</th><th>Memory</th><th>Linked to</th><th>Backup</th></tr></thead>
-          <tbody>${services.map(serviceRow).join("") || `<tr><td colspan="5" class="empty">No databases. <span class="mono">berth pg:create mydb</span></td></tr>`}</tbody>
+          <thead><tr><th>Service</th><th>State</th><th class="r">CPU</th><th>Memory</th><th>Linked to</th><th>Backup</th></tr></thead>
+          <tbody>${services.map(serviceRow).join("") || `<tr><td colspan="6" class="empty">No databases. <span class="mono">berth pg:create mydb</span></td></tr>`}</tbody>
         </table></div>
       </div>
       <div class="card">
@@ -336,8 +338,136 @@ function renderOverview() {
     });
   };
   draw();
-  redraw = draw;
+  renderLoad();
+  redraw = () => { draw(); renderLoad(); };
 }
+
+// ---------- system load ----------
+
+let load = null;
+let loadRange = "1h";
+const fetchLoad = () => api("/api/load?range=" + loadRange).catch(() => load);
+
+// Cores used, as a share of one core (Activity Monitor's convention: a
+// busy app on four cores shows 400%).
+function corePct(v) {
+  if (v == null) return "–";
+  const x = v * 100;
+  if (x === 0) return "0%";
+  if (x < 0.1) return "<0.1%";
+  return x.toFixed(x < 10 ? 1 : 0) + "%";
+}
+function cpuCell(name) {
+  const latest = load?.latest;
+  if (!latest?.apps) return `<span class="muted">–</span>`;
+  const v = latest.apps[name];
+  return v == null ? `<span class="muted">–</span>` : corePct(v);
+}
+
+function renderLoad() {
+  const box = $("#load");
+  if (!box) return;
+  const rep = load;
+  const L = rep?.latest;
+  const seg = `<div class="seg" role="group" aria-label="Load time range">${["1h", "24h"].map((r) => `<button data-load-range="${r}" class="${r === loadRange ? "on" : ""}">${r}</button>`).join("")}</div>`;
+  const head = `<div class="chart-head section-head"><h2>System load</h2>${seg}</div>`;
+  if (!L) {
+    box.innerHTML = head + `<div class="card empty">Collecting the first sample…</div>`;
+    return;
+  }
+  const cores = L.cores || 1;
+  const per = L.load[0] / cores;
+  const busiest = Object.entries(L.apps || {}).sort((a, b) => b[1] - a[1])[0];
+  const mem = L.mem_pressure;
+  const peak = rep.peak;
+  box.innerHTML = head + `
+    <div class="grid kpis load-kpis">
+      ${kpi("Load average", `${L.load[0].toFixed(2)} <small>on ${cores} cores</small>`, per >= 1 ? status("critical", "Overloaded") : per >= 0.7 ? status("warning", "Busy") : "",
+        `5 min ${L.load[1].toFixed(2)} · 15 min ${L.load[2].toFixed(2)}`)}
+      ${kpi("CPU", L.cpu < 0 ? "–" : pct(L.cpu), "", busiest && busiest[1] >= 0.005 ? `busiest: ${esc(busiest[0])} ${corePct(busiest[1])}` : "all apps idle")}
+      ${kpi("Memory in use", pct(mem), mem >= 0.9 ? status("critical", "Under pressure") : mem >= 0.8 ? status("warning", "Tight") : "",
+        `<div class="meter ${mem >= 0.8 ? "hot" : ""}" style="width:100%"><span style="width:${(mem * 100).toFixed(1)}%"></span></div>`)}
+      ${kpi("Swap used", bytes(L.swap_used), "", L.swap_total ? `${bytes(L.swap_total)} of swap files` : "no swap in use")}
+      ${kpi(`Peak load, ${loadRange}`, peak ? peak.load[0].toFixed(2) : "–", "", peak ? `at ${clock(peak.t)}` : "")}
+    </div>
+    <div class="grid cols-2" style="margin-top:16px">
+      <div class="card">
+        <div class="chart-head"><h2>Load average</h2><div class="legend">
+          <span><i class="line" style="background:var(--series-1)"></i>1 min</span><span><i class="line" style="background:var(--muted)"></i>15 min</span>
+        </div></div>
+        <div class="chart short" id="load-avg"></div>
+      </div>
+      <div class="card">
+        <div class="chart-head"><h2>CPU and memory</h2><div class="legend">
+          <span><i class="line" style="background:var(--series-1)"></i>CPU busy</span><span><i class="line" style="background:var(--series-2)"></i>Memory in use</span>
+        </div></div>
+        <div class="chart short" id="load-cpu"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="chart-head"><h2>CPU by app <span class="count">% of one core</span></h2><div class="legend" id="load-legend"></div></div>
+      <div class="chart short" id="load-apps"></div>
+    </div>`;
+
+  const step = rep.step;
+  const fmtWhen = (t) => step <= 60 ? clock(t) : `${day(t)} ${clock(t)}–${clock(t + step)}`;
+  const pts = rep.points;
+  const v = (p, f) => (p.n ? f(p) : null);
+  lines($("#load-avg"), {
+    points: pts.map((p) => ({ t: p.t, l1: v(p, (p) => p.load[0]), l15: v(p, (p) => p.load[2]) })),
+    series: [
+      { key: "l15", label: "15 min", cls: "sl", color: "var(--muted)" },
+      { key: "l1", label: "1 min", cls: "s1", color: "var(--series-1)" },
+    ],
+    fmtX: clock, fmtWhen, fmtY: (x) => String(+x.toFixed(2)), zeroIsGap: false, empty: "No samples yet",
+  });
+  lines($("#load-cpu"), {
+    points: pts.map((p) => ({ t: p.t, cpu: p.n && p.cpu >= 0 ? p.cpu * 100 : null, mem: v(p, (p) => p.mem_pressure * 100) })),
+    series: [
+      { key: "cpu", label: "CPU busy", cls: "s1", color: "var(--series-1)" },
+      { key: "mem", label: "Memory in use", cls: "s2", color: "var(--series-2)" },
+    ],
+    fmtX: clock, fmtWhen, fmtY: (x) => Math.round(x) + "%", zeroIsGap: false, yMax: 100, empty: "No samples yet",
+  });
+
+  // Apps keep the colors they have everywhere else; services and apps
+  // past the seventh share one gray.
+  const colors = appColors((overview?.status?.apps || []).map((a) => a.name));
+  const keys = new Set();
+  pts.forEach((p) => Object.keys(p.apps || {}).forEach((k) => keys.add(k)));
+  const series = [];
+  const other = { key: "_other", label: "Services & others", cls: "sm", color: "var(--axis)" };
+  const points = pts.map((p) => {
+    const o = { t: p.t };
+    for (const [k, c] of Object.entries(p.apps || {})) {
+      const key = colors[k] ? k : "_other";
+      o[key] = (o[key] || 0) + c * 100;
+    }
+    return o;
+  });
+  for (const k of [...keys].sort()) {
+    if (!colors[k]) continue;
+    if (!points.some((p) => p[k] >= 0.05)) continue; // idle all along
+    series.push({ key: k, label: k, cls: "s" + colors[k], color: `var(--series-${colors[k]})` });
+  }
+  if (points.some((p) => p._other >= 0.05)) series.push(other);
+  $("#load-legend").innerHTML = series.length > 1 ? series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("") : "";
+  bars($("#load-apps"), {
+    points, series: series.length ? series : [{ key: "none", label: "CPU", cls: "s1", color: "var(--series-1)" }],
+    fmtX: clock, fmtWhen, fmtY: (x) => corePct(x / 100), empty: "Apps have been idle",
+  });
+}
+
+main.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-load-range]");
+  if (!b || b.dataset.loadRange === loadRange) return;
+  loadRange = b.dataset.loadRange;
+  main.querySelectorAll("[data-load-range]").forEach((x) => x.classList.toggle("on", x === b));
+  $("#load")?.classList.add("fade");
+  load = await fetchLoad();
+  $("#load")?.classList.remove("fade");
+  renderLoad();
+});
 
 function kpi(label, value, deltaHTML, foot = "") {
   return `<div class="card tile"><div class="label">${label}</div><div class="value num">${value}</div><div class="foot">${deltaHTML}${deltaHTML && foot ? " · " : ""}${foot}</div></div>`;
@@ -371,6 +501,7 @@ function appRow(a, s, byName) {
     <td class="r num">${ms(t.p50)}</td>
     <td class="r num">${ms(t.p95)}</td>
     <td class="r num">${num(t.visitors)}</td>
+    <td class="r num">${cpuCell(a.name)}</td>
     <td>${memCell(a)}</td>
     <td class="num">${a.state === "running" ? since(a.since) : "–"}</td>
   </tr>`;
@@ -388,6 +519,7 @@ function serviceRow(s) {
   return `<tr>
     <td><b>${esc(s.kind)}:${esc(s.name)}</b><div class="sub-line mono">${esc(s.image)}</div></td>
     <td>${s.running ? status("good", "Running") : status("critical", "Down")}</td>
+    <td class="r num">${cpuCell(s.kind + ":" + s.name)}</td>
     <td class="num">${s.memory_bytes ? bytes(s.memory_bytes) : "–"}</td>
     <td><div class="chips">${(s.links || []).map((l) => `<a class="pill" href="#/apps/${encodeURIComponent(l)}">${esc(l)}</a>`).join("") || `<span class="muted">–</span>`}</div></td>
     <td>${backupAge(s.last_backup)}</td>
@@ -626,6 +758,7 @@ function renderTab(name, det, live) {
       <dt>Domains</dt><dd>${(info.domains || []).map(esc).join(", ") || "–"}</dd>
       <dt>Services</dt><dd><div class="chips">${(info.links || []).map((l) => `<span class="pill">${esc(l)}</span>`).join("") || "–"}</div></dd>
       <dt>Storage</dt><dd>${(info.mounts || []).map((m) => `<span class="mono">${esc(m)}</span>`).join(", ") || "–"}</dd>
+      ${info.sqlite ? `<dt>SQLite</dt><dd><span class="mono">${esc(info.sqlite.env_var)}</span> → <span class="mono">/data/sqlite/app.db</span> · last backup ${info.sqlite.last_backup ? backupAge(info.sqlite.last_backup) : `<span class="muted">none yet</span>`}</dd>` : ""}
       <dt>AI</dt><dd>${ai}</dd>
       <dt>Memory</dt><dd>${esc(det.app.memory_limit || "–")}</dd>
       <dt>Created</dt><dd>${ago(info.created)}</dd>

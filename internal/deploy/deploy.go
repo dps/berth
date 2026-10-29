@@ -44,6 +44,10 @@ type Deployer struct {
 	Backup func(ctx context.Context, app *state.App, rel *state.Release, out io.Writer) (map[string]string, error)
 	// RestoreData loads those dumps back (rollback --with-data).
 	RestoreData func(ctx context.Context, app *state.App, backups map[string]string, out io.Writer) error
+	// Workers puts the app's Procfile workers in its live web container,
+	// stopping any in a container that's no longer live. Called with the
+	// app's lock held.
+	Workers func(ctx context.Context, app string, out io.Writer)
 
 	HealthInterval time.Duration
 	MinFreeBytes   uint64
@@ -54,7 +58,8 @@ type Deployer struct {
 	appLocks map[string]*sync.Mutex
 	portMu   sync.Mutex
 	busy     map[string]bool
-	draining map[int]*drainer // host port → old container finishing its drain
+	draining map[int]*drainer  // host port → old container finishing its drain
+	held     map[string]string // app → container takeOver stopped (SQLite apps)
 }
 
 func New(store *state.Store, rt runtime.Runtime, router Router) *Deployer {
@@ -70,6 +75,7 @@ func New(store *state.Store, rt runtime.Runtime, router Router) *Deployer {
 		appLocks:       map[string]*sync.Mutex{},
 		busy:           map[string]bool{},
 		draining:       map[int]*drainer{},
+		held:           map[string]string{},
 	}
 }
 
@@ -220,22 +226,32 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*state.Release, err
 	}
 	rel.Env = ContainerEnv(env)
 	rel.ReleaseCmd = env.StrSetting(state.KeyRelease, rel.ProcfileRelease)
+	if rel.ReleaseCmd != "" {
+		d.takeOver(ctx, app, out) // the release command needs the SQLite volume
+	}
 	if err := d.release(ctx, app, cfg, rel, env, !req.ReuseImage, out); err != nil {
 		rel.Status, rel.Error, rel.FailedStage = state.StatusFailed, err.Error(), "release"
 		d.Store.SaveRelease(app.Name, rel)
 		d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d: %v", n, err)})
-		if prev := d.Store.CurrentRelease(app.Name); prev != nil && prev.Status == state.StatusRunning {
+		if prev := d.Store.CurrentRelease(app.Name); prev != nil && prev.Status == state.StatusRunning && !d.heldFor(app.Name, prev.Container) {
 			detail(out, "v%d is still serving traffic", prev.N)
 		}
 		for svc, f := range rel.Backups {
+			if svc == "sqlite" {
+				detail(out, "if it changed the SQLite database before failing, the backup from just before is")
+				detail(out, "  berth sqlite:restore %s %s", app.Name, f)
+				continue
+			}
 			name := strings.TrimPrefix(svc, "pg:")
 			detail(out, "if it changed %s before failing, the backup from just before is", svc)
 			detail(out, "  berth pg:restore %s %s", name, f)
 		}
+		d.giveBack(ctx, app, cfg, env, out)
 		return rel, err
 	}
 	if err := d.startCheckSwap(ctx, app, cfg, rel, env, out); err != nil {
 		d.Event(state.Event{Kind: "deploy.failed", App: app.Name, Message: fmt.Sprintf("v%d: %v", n, err)})
+		d.giveBack(ctx, app, cfg, env, out)
 		return rel, err
 	}
 	d.Event(state.Event{Kind: "deploy.ok", App: app.Name, Message: fmt.Sprintf("v%d %s live", n, short(rel.SHA)), Fields: map[string]any{"release": n, "sha": rel.SHA}})
@@ -430,6 +446,9 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 	if prev != nil && prev.Container != "" {
 		avoid = prev.HostPort
 	}
+	if prev != nil && prev.N != rel.N {
+		d.takeOver(ctx, app, out)
+	}
 	port, err := d.pickSlot(app, cfg, avoid)
 	if err != nil {
 		return err
@@ -454,7 +473,7 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 		if logs != "" {
 			fmt.Fprintf(out, "-----> Last log lines from %s:\n%s", rel.Container, indentString(logs))
 		}
-		if prev != nil && prev.Status == state.StatusRunning {
+		if prev != nil && prev.Status == state.StatusRunning && !d.heldFor(app.Name, prev.Container) {
 			detail(out, "v%d is still serving traffic", prev.N)
 		}
 		return err
@@ -475,18 +494,22 @@ func (d *Deployer) startCheckSwap(ctx context.Context, app *state.App, cfg *stat
 			detail(out, "warning: proxy update failed: %v", err)
 		}
 	}
-	// Workers move straight over (stopped before starting the new ones, so
-	// no job is picked up twice); retire saves prev after its drain, so
-	// this saves first.
+	// Workers left in their own containers by an older Berth; retire saves
+	// prev after its drain, so this saves first.
 	if prev != nil && prev.N != rel.N {
-		d.stopWorkers(ctx, app.Name, prev, out)
+		d.RemoveWorkerContainers(ctx, app.Name, prev)
 	}
-	if prev != nil && prev.N != rel.N && prev.Container != "" {
+	if prev != nil && d.heldFor(app.Name, prev.Container) {
+		say(out, "v%d is live", rel.N)
+		d.released(app.Name, prev)
+	} else if prev != nil && prev.N != rel.N && prev.Container != "" {
 		drain := env.IntSetting(state.KeyDrain, 5)
 		say(out, "v%d is live; v%d drains for %ds, then stops", rel.N, prev.N, drain)
 		go d.retire(app.Name, prev.N, prev.Container, prev.HostPort, time.Duration(drain)*time.Second)
 	}
-	d.startWorkers(ctx, app, cfg, rel, env, out)
+	// The old container's workers stop before the new one's start, so no
+	// job is picked up twice.
+	d.workers(ctx, app.Name, out)
 	return nil
 }
 
@@ -559,12 +582,9 @@ func (d *Deployer) runContainer(ctx context.Context, app *state.App, cfg *state.
 		return err
 	}
 	containerPort := rel.Env["PORT"]
-	var vols []string
-	for _, m := range app.Mounts {
-		if err := os.MkdirAll(m.Source, 0o755); err != nil {
-			return err
-		}
-		vols = append(vols, m.Source+":"+m.Path)
+	vols, err := volumes(app)
+	if err != nil {
+		return err
 	}
 	d.RT.Remove(ctx, rel.Container) // stale container with the same name
 	return d.RT.Run(ctx, runtime.RunOpts{
@@ -631,12 +651,9 @@ func (d *Deployer) release(ctx context.Context, app *state.App, cfg *state.Confi
 	if err := state.WriteFile(envFile, []byte(file), 0o600); err != nil {
 		return err
 	}
-	var vols []string
-	for _, m := range app.Mounts {
-		if err := os.MkdirAll(m.Source, 0o755); err != nil {
-			return err
-		}
-		vols = append(vols, m.Source+":"+m.Path)
+	vols, err := volumes(app)
+	if err != nil {
+		return err
 	}
 	name := state.ContainerName(app.Name, rel.N) + "-release"
 	d.RT.Remove(ctx, name)
@@ -864,6 +881,7 @@ func (d *Deployer) Rollback(ctx context.Context, appName string, n int, withData
 	env, _ := d.Store.Env(appName)
 	say(out, "Rolling back %s to v%d (%s)", appName, target.N, short(target.SHA))
 	if err := d.startCheckSwap(ctx, app, cfg, target, env, out); err != nil {
+		d.giveBack(ctx, app, cfg, env, out)
 		return target, err
 	}
 	msg := fmt.Sprintf("v%d → v%d", cur, target.N)
@@ -957,14 +975,20 @@ func (d *Deployer) Restart(ctx context.Context, appName string, out io.Writer) e
 	// startCheckSwap retires "prev", which is this same release; handle the
 	// old container ourselves.
 	fresh := *rel
+	stopped := d.takeOver(ctx, app, out) != nil
 	if err := d.startCheckSwapSame(ctx, app, cfg, &fresh, env, out); err != nil {
+		d.giveBack(ctx, app, cfg, env, out)
 		return err
 	}
-	if old != "" && old != fresh.Container {
+	if stopped {
+		d.mu.Lock()
+		delete(d.held, appName)
+		d.mu.Unlock()
+	} else if old != "" && old != fresh.Container {
 		go d.retire(appName, rel.N, old, oldPort, time.Duration(env.IntSetting(state.KeyDrain, 5))*time.Second)
 	}
-	d.stopWorkers(ctx, appName, &fresh, out)
-	d.startWorkers(ctx, app, cfg, &fresh, env, out)
+	d.RemoveWorkerContainers(ctx, appName, &fresh)
+	d.workers(ctx, appName, out)
 	d.Event(state.Event{Kind: "restart", App: appName, Message: fmt.Sprintf("v%d restarted", rel.N)})
 	return nil
 }
@@ -1023,7 +1047,7 @@ func (d *Deployer) Stop(ctx context.Context, appName string) error {
 		d.Router.Apply(ctx)
 	}
 	if rel := d.Store.CurrentRelease(appName); rel != nil {
-		d.stopWorkers(ctx, appName, rel, nil)
+		d.RemoveWorkerContainers(ctx, appName, rel)
 		if rel.Container != "" {
 			d.RT.Stop(ctx, rel.Container, 10*time.Second)
 			d.RT.Remove(ctx, rel.Container)
@@ -1032,6 +1056,7 @@ func (d *Deployer) Stop(ctx context.Context, appName string) error {
 			d.Store.SaveRelease(appName, rel)
 		}
 	}
+	d.workers(ctx, appName, nil)
 	d.Event(state.Event{Kind: "stop", App: appName, Message: "stopped"})
 	return nil
 }
@@ -1059,8 +1084,8 @@ func (d *Deployer) Start(ctx context.Context, appName string, out io.Writer) err
 	if err := d.startCheckSwapSame(ctx, app, cfg, rel, env, out); err != nil {
 		return err
 	}
-	d.stopWorkers(ctx, appName, rel, nil) // leftovers, if any
-	d.startWorkers(ctx, app, cfg, rel, env, out)
+	d.RemoveWorkerContainers(ctx, appName, rel)
+	d.workers(ctx, appName, out)
 	d.Event(state.Event{Kind: "start", App: appName, Message: fmt.Sprintf("v%d started", rel.N)})
 	return nil
 }

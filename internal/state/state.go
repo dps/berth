@@ -164,6 +164,42 @@ type Mount struct {
 	Source string `json:"source"` // on the host
 }
 
+// SQLite is an app's own SQLite database (design.md, SQLite): a container
+// volume, an ext4 disk image the VM attaches, mounted at SQLiteDir. A
+// volume can be attached to one VM at a time, so only one container ever
+// has the database open.
+type SQLite struct {
+	Volume    string    `json:"volume"`
+	EnvVar    string    `json:"env_var"` // the URL's variable; SQLITE_PATH is set too
+	CreatedAt time.Time `json:"created_at"`
+}
+
+const (
+	SQLiteDir     = "/data/sqlite"
+	SQLiteFile    = "app.db"
+	SQLitePath    = SQLiteDir + "/" + SQLiteFile
+	SQLitePathVar = "SQLITE_PATH"
+	// SQLiteURL is the form Django (dj-database-url), SQLAlchemy and most
+	// URL parsers take: four slashes for an absolute path.
+	SQLiteURL = "sqlite:///" + SQLitePath
+)
+
+// SQLiteVolume names an app's SQLite volume.
+func SQLiteVolume(app string) string { return "berth-sqlite-" + app }
+
+// Volumes is every -v an app's containers get: its storage folders and
+// its SQLite volume.
+func (a *App) Volumes() []string {
+	var vols []string
+	for _, m := range a.Mounts {
+		vols = append(vols, m.Source+":"+m.Path)
+	}
+	if a.SQLite != nil {
+		vols = append(vols, a.SQLite.Volume+":"+SQLiteDir)
+	}
+	return vols
+}
+
 type Webhook struct {
 	ID     int64  `json:"id,omitempty"`
 	Secret string `json:"secret"`
@@ -204,6 +240,7 @@ type App struct {
 	Webhook   Webhook    `json:"webhook"`
 	Domains   []string   `json:"domains,omitempty"`
 	Mounts    []Mount    `json:"mounts,omitempty"`
+	SQLite    *SQLite    `json:"sqlite,omitempty"`
 	Slots     []int      `json:"slots,omitempty"` // two fixed host ports; releases alternate between them
 	Links     []string   `json:"links,omitempty"` // "pg:mydb", "redis:cache"
 	Auth      *BasicAuth `json:"auth,omitempty"`

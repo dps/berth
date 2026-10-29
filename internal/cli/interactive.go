@@ -44,6 +44,12 @@ func cmdRun() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A SQLite database is open in one container at a time: run the
+			// command in the app's, with that release's config.
+			if a.SQLite != nil && rel.Container != "" {
+				fmt.Fprintf(os.Stderr, "-----> Running inside %s (it has SQLite, so not in a new container)\n", rel.Container)
+				return execContainer(rel.Container, args[1:])
+			}
 			env, err := s.Env(app)
 			if err != nil {
 				return err
@@ -68,10 +74,7 @@ func cmdRun() *cobra.Command {
 			tmp.WriteString(file)
 			tmp.Close()
 			defer os.Remove(tmp.Name())
-			var vols []string
-			for _, m := range a.Mounts {
-				vols = append(vols, m.Source+":"+m.Path)
-			}
+			vols := a.Volumes()
 			tty := term.IsTerminal(int(os.Stdin.Fd()))
 			ap := runtime.NewApple()
 			argv := ap.RunArgs(runtime.RunOpts{

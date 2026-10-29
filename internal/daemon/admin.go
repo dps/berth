@@ -125,6 +125,7 @@ func (d *Daemon) adminHandler() http.Handler {
 	mux.HandleFunc("GET /api/apps/{app}/live", d.apiLive)
 	mux.HandleFunc("GET /api/apps/{app}/logs", d.apiLogs)
 	mux.HandleFunc("GET /api/events", d.apiEvents)
+	mux.HandleFunc("GET /api/load", d.apiLoad)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -223,6 +224,7 @@ type AppInfo struct {
 	Domains   []string      `json:"domains,omitempty"`
 	Links     []string      `json:"links,omitempty"`
 	Mounts    []string      `json:"mounts,omitempty"`
+	SQLite    *SQLiteInfo   `json:"sqlite,omitempty"`
 	Access    *state.Access `json:"access,omitempty"`
 	BasicAuth bool          `json:"basic_auth,omitempty"`
 	DevOf     string        `json:"dev_of,omitempty"`
@@ -275,6 +277,9 @@ func (d *Daemon) apiApp(w http.ResponseWriter, r *http.Request) {
 	for _, m := range a.Mounts {
 		info.Mounts = append(info.Mounts, m.Path)
 	}
+	if a.SQLite != nil {
+		info.SQLite = &SQLiteInfo{App: a.Name, Volume: a.SQLite.Volume, EnvVar: a.SQLite.EnvVar, DevOf: a.DevOf, LastBackup: d.latestSQLiteBackup(a.Name)}
+	}
 	for k := range env {
 		if !strings.HasPrefix(k, "BERTH_") {
 			info.EnvKeys = append(info.EnvKeys, k)
@@ -316,6 +321,20 @@ func (d *Daemon) apiLive(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	reqs, seq := d.stats.RecentSince(name, since)
 	writeJSON(w, map[string]any{"requests": reqs, "seq": seq})
+}
+
+var loadRanges = map[string][2]time.Duration{
+	"1h":  {time.Hour, time.Minute},
+	"24h": {24 * time.Hour, 10 * time.Minute},
+}
+
+func (d *Daemon) apiLoad(w http.ResponseWriter, r *http.Request) {
+	rg, ok := loadRanges[r.URL.Query().Get("range")]
+	if !ok {
+		rg = loadRanges["1h"]
+	}
+	rep := d.load.query(time.Now(), rg[0], rg[1])
+	writeJSON(w, rep)
 }
 
 func (d *Daemon) apiLogs(w http.ResponseWriter, r *http.Request) {

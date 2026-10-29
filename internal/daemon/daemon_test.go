@@ -24,6 +24,7 @@ import (
 func newTestDaemon(t *testing.T) (*Daemon, *runtime.Fake, string) {
 	t.Helper()
 	os.Setenv("BERTH_NO_MDNS", "1")
+	workerSettle = 0
 	s := &state.Store{Root: t.TempDir()}
 	cfg := state.DefaultConfig()
 	cfg.PortMin, cfg.PortMax = 18300, 18399

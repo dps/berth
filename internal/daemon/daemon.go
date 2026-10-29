@@ -58,6 +58,7 @@ type Daemon struct {
 	mu            sync.Mutex
 	crash         map[string]*crashState
 	tails         map[string]context.CancelFunc // container -> tail cancel
+	wp            workerProcs                   // workers, inside web containers
 	queued        map[string]bool
 	hookHits      map[string][]time.Time // rate limiting per app
 	mdns          *mdnsRegistry
@@ -71,6 +72,7 @@ type Daemon struct {
 	authKey       ed25519.PrivateKey
 	stats         *analytics.Stats // request analytics from access logs; nil until Run
 	statusCache   statusCache
+	load          loadMonitor     // system load, sampled every loadEvery
 	cronRunning   map[string]bool // app/job index → a run in progress
 	previewMu     map[string]*sync.Mutex
 	previewNoted  map[string]bool // preview@sha already told it's over the limit
@@ -103,6 +105,7 @@ func New(store *state.Store, rt runtime.Runtime) *Daemon {
 	d.Deployer.Event = d.event
 	d.Deployer.Backup = d.releaseBackup
 	d.Deployer.RestoreData = d.restoreData
+	d.Deployer.Workers = d.appWorkers
 	return d
 }
 
@@ -208,6 +211,9 @@ func (d *Daemon) Apply(ctx context.Context) error {
 	}
 	for _, a := range apps {
 		r := caddy.Route{App: a.Name, AccessLog: d.Store.AccessLog(a)}
+		if a.SQLite != nil {
+			r.TryDuration = sqliteTryDuration
+		}
 		r.PublicHosts, r.LANHosts = hosts(a.Name, a.Private, a.Domains)
 		var tokens map[string]string
 		if a.DevOf != "" {
@@ -388,6 +394,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer aiSrv.Close()
 	d.startAnalytics(d.ctx)
+	d.startLoad(d.ctx)
+	defer d.saveLoad()
 	adminSrv, err := d.startAdmin(cfg)
 	if err != nil {
 		ln.Close()

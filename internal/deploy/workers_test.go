@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -31,9 +32,25 @@ func gone(t *testing.T, h *harness, names ...string) {
 	}
 }
 
+// hookCalls records each call of the Workers hook as "v<n> <container>",
+// or "stopped" when the app has no live container.
+func hookCalls(h *harness) *[]string {
+	var calls []string
+	h.d.Workers = func(ctx context.Context, app string, out io.Writer) {
+		rel := h.store.CurrentRelease(app)
+		a, _ := h.store.App(app)
+		if a.Stopped || rel == nil || rel.Container == "" {
+			calls = append(calls, "stopped")
+			return
+		}
+		calls = append(calls, fmt.Sprintf("v%d %s", rel.N, rel.Container))
+	}
+	return &calls
+}
+
 func TestWorkersFollowTheRelease(t *testing.T) {
-	workerSettle = 0
 	h := newHarness(t)
+	calls := hookCalls(h)
 	ctx := context.Background()
 	h.commit(map[string]string{
 		"Procfile": "web: node server.js\nrelease: node migrate.js\nworker: node worker.js\nclock: node clock.js\n",
@@ -44,52 +61,36 @@ func TestWorkersFollowTheRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
-	if len(r1.Workers) != 2 || r1.Processes["worker"] != "node worker.js" || len(r1.Cron) != 1 || r1.Cron[0].Schedule != "0 7 * * *" {
-		t.Fatalf("v1 workers %+v processes %v cron %v", r1.Workers, r1.Processes, r1.Cron)
+	if r1.Processes["worker"] != "node worker.js" || len(r1.Cron) != 1 || r1.Cron[0].Schedule != "0 7 * * *" {
+		t.Fatalf("v1 processes %v cron %v", r1.Processes, r1.Cron)
 	}
-	if !strings.Contains(out.String(), "Started clock.1, worker.1") {
-		t.Fatalf("deploy output:\n%s", out.String())
+	last := func() string { return (*calls)[len(*calls)-1] }
+	// Each change hands the live container to berthd once it's current.
+	if len(*calls) != 1 || last() != "v1 "+r1.Container {
+		t.Fatalf("after deploy: %v", *calls)
 	}
-	v1 := []string{r1.Workers[0].Container, r1.Workers[1].Container}
-	running(t, h, v1...)
-	cs, _ := h.rt.List(ctx)
-	if c, _ := runtime.Find(cs, v1[0]); c.Labels["dev.berth.process"] != "clock.1" || c.Labels["dev.berth.app"] != "web" {
-		t.Fatalf("labels %v", c.Labels)
-	}
-
-	// A new release replaces the workers.
 	h.commit(map[string]string{"x.txt": "2"})
 	r2, err := h.d.Deploy(ctx, Request{App: "web", Trigger: "test", Out: &out})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || last() != "v2 "+r2.Container {
+		t.Fatalf("second deploy: %v %v", err, *calls)
 	}
-	gone(t, h, v1...)
-	if old, _ := h.store.Release("web", 1); len(old.Workers) != 0 {
-		t.Fatalf("v1 still lists workers %+v", old.Workers)
-	}
-	running(t, h, r2.Workers[0].Container, r2.Workers[1].Container)
-
 	// Config changes keep the Procfile's processes and the cron list.
 	h.store.SaveEnv("web", state.Env{"BERTH_DRAIN": "0", "BERTH_HEALTH_TIMEOUT": "3", "A": "1"})
 	r3, err := h.d.Deploy(ctx, Request{App: "web", Trigger: "config", ReuseImage: true, Out: &out})
-	if err != nil || len(r3.Workers) != 2 || len(r3.Cron) != 1 {
+	if err != nil || len(r3.Processes) != 2 || len(r3.Cron) != 1 {
 		t.Fatalf("config release: %v %+v", err, r3)
 	}
 
 	// Scale.
+	n := len(*calls)
 	if err := h.d.Scale(ctx, "web", "worker", 3, &out); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.d.Scale(ctx, "web", "clock", 0, &out); err != nil {
 		t.Fatal(err)
 	}
-	cur := h.store.CurrentRelease("web")
-	var names []string
-	for _, w := range cur.Workers {
-		names = append(names, w.Name())
-	}
-	if strings.Join(names, " ") != "worker.1 worker.2 worker.3" {
-		t.Fatalf("after scaling: %v", names)
+	if len(*calls) != n+2 {
+		t.Fatalf("scale calls %v", *calls)
 	}
 	if err := h.d.Scale(ctx, "web", "nope", 1, &out); err == nil || !strings.Contains(err.Error(), "clock, worker") {
 		t.Fatalf("unknown type: %v", err)
@@ -98,35 +99,51 @@ func TestWorkersFollowTheRelease(t *testing.T) {
 		t.Fatalf("scale %v", a.Scale)
 	}
 
-	// A crashed worker is restarted on its own.
-	h.rt.Crash(cur.Workers[1].Container)
-	if err := h.d.RecoverWorker(ctx, "web", "worker.2"); err != nil {
-		t.Fatal(err)
+	// Stop, start, restart and rollback each tell berthd.
+	if err := h.d.Stop(ctx, "web"); err != nil || last() != "stopped" {
+		t.Fatalf("stop: %v %v", err, *calls)
 	}
-	after := h.store.CurrentRelease("web")
-	if after.Workers[1].Container == cur.Workers[1].Container {
-		t.Fatal("worker.2 wasn't replaced")
+	if err := h.d.Start(ctx, "web", &out); err != nil || last() != "v3 "+h.store.CurrentRelease("web").Container {
+		t.Fatalf("start: %v %v", err, *calls)
 	}
-	running(t, h, after.Workers[1].Container)
+	if err := h.d.Restart(ctx, "web", &out); err != nil || last() != "v3 "+h.store.CurrentRelease("web").Container {
+		t.Fatalf("restart: %v %v", err, *calls)
+	}
+	if _, err := h.d.Rollback(ctx, "web", 2, false, &out); err != nil || last() != fmt.Sprintf("v%d %s", h.store.CurrentRelease("web").N, h.store.CurrentRelease("web").Container) {
+		t.Fatalf("rollback: %v %v", err, *calls)
+	}
+	// No worker ever got a container of its own.
+	for _, c := range h.rt.CallLog("run ") {
+		if strings.Contains(c, "worker") || strings.Contains(c, "clock") {
+			t.Fatalf("a worker container ran: %s", c)
+		}
+	}
+}
 
-	// Stop takes the workers down; start brings them back at scale.
-	if err := h.d.Stop(ctx, "web"); err != nil {
+func TestOldWorkerContainersAreRemoved(t *testing.T) {
+	h := newHarness(t)
+	hookCalls(h)
+	ctx := context.Background()
+	h.commit(map[string]string{"Procfile": "worker: node worker.js\n"})
+	r1, err := h.d.Deploy(ctx, Request{App: "web", Trigger: "test"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	gone(t, h, after.Workers[0].Container)
-	if err := h.d.Start(ctx, "web", &out); err != nil {
+	// As an older Berth left it: a worker in its own container.
+	h.rt.Run(ctx, runtime.RunOpts{Name: "berth-web-1-worker1-x", Image: r1.Image, Detach: true})
+	r1.Workers = []state.Worker{{Type: "worker", Index: 1, Container: "berth-web-1-worker1-x"}}
+	h.store.SaveRelease("web", r1)
+	h.commit(map[string]string{"x.txt": "2"})
+	if _, err := h.d.Deploy(ctx, Request{App: "web", Trigger: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(h.store.CurrentRelease("web").Workers); n != 3 {
-		t.Fatalf("%d workers after start", n)
+	h.waitRetired(t, r1.Container)
+	cs, _ := h.rt.List(ctx)
+	if _, ok := runtime.Find(cs, "berth-web-1-worker1-x"); ok {
+		t.Fatal("the old worker container is still there")
 	}
-
-	// Rolling back runs the old release's workers at today's scale.
-	if _, err := h.d.Rollback(ctx, "web", 2, false, &out); err != nil {
-		t.Fatal(err)
-	}
-	if n := len(h.store.CurrentRelease("web").Workers); n != 3 {
-		t.Fatalf("%d workers after rollback", n)
+	if old, _ := h.store.Release("web", 1); len(old.Workers) != 0 {
+		t.Fatalf("v1 still lists workers %+v", old.Workers)
 	}
 }
 

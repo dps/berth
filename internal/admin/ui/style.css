@@ -142,6 +142,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px 24px 64px; }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.health { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .grid.kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.grid.load-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.section-head { margin-bottom: 12px; }
+.section-head h2 { color: var(--ink-2); }
 .section { margin-top: 28px; }
 .section > h2, .card > h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 12px; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
 .section > h2 .count, .card > h2 .count { color: var(--muted); font-weight: 500; }
@@ -275,7 +278,7 @@ select, input[type="search"] { font: inherit; padding: 6px 10px; border-radius: 
 .fade { opacity: 0.55; transition: opacity 0.2s; }
 
 @media (max-width: 1100px) {
-  .grid.health, .grid.kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid.health, .grid.kpis, .grid.load-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .topbar { padding: 0 16px; gap: 10px; }
@@ -283,7 +286,7 @@ select, input[type="search"] { font: inherit; padding: 6px 10px; border-radius: 
   .nav a { padding: 6px 8px; }
   main { padding: 16px 16px 48px; }
   .grid.cols-2, .grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
-  .grid.health, .grid.kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.health, .grid.kpis, .grid.load-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tile .value { font-size: 22px; }
   .hide-sm { display: none; }
 }

@@ -120,6 +120,7 @@ func NewRoot() *cobra.Command {
 	add("ai", cmdAISetup(), cmdAIStatus(), cmdAIModels(), cmdAIKey(), cmdAIAlias(), cmdAIPull(), cmdAIEnable(), cmdAIDisable(), cmdAIUsage())
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
+	add("services", sqliteCommands()...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),
 		cmdOffsiteSetup(), cmdOffsiteStatus(), cmdOffsiteRun(), cmdOffsiteGet(), cmdOffsiteKey(), cmdOffsiteOff(),
 		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUpgrade(), cmdUninstall())

@@ -51,6 +51,7 @@ func (d *Daemon) hBackup(ctx context.Context, params json.RawMessage, out io.Wri
 		}
 		fmt.Fprintf(out, "-----> Dumped %s:%s → %s\n", sv.Kind, sv.Name, filepath.Base(path))
 	}
+	d.backupAllSQLite(ctx, false, out)
 	if p.Path == "" {
 		home, _ := os.UserHomeDir()
 		p.Path = filepath.Join(home, "berth-backup-"+time.Now().Format("20060102-150405")+".tar.gz")
@@ -322,6 +323,11 @@ func (d *Daemon) hRestore(ctx context.Context, params json.RawMessage, out io.Wr
 		}
 		os.Remove(d.Store.Path("apps", a.Name, "current"))
 		d.installHook(a)
+		if a.SQLite != nil {
+			if err := d.restoreSQLiteVolume(ctx, a, out); err != nil {
+				return nil, err
+			}
+		}
 		switch {
 		case a.DevOf != "":
 			fmt.Fprintf(out, "-----> %s is a dev version; the next `berth dev:push` from %s's repo brings it back\n", a.Name, a.DevOf)

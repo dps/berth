@@ -69,6 +69,12 @@ func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out
 	for _, m := range parent.Mounts {
 		dev.Mounts = append(dev.Mounts, state.Mount{Path: m.Path, Source: d.Store.Path("data", "apps", name, filepath.Base(m.Source))})
 	}
+	if parent.SQLite != nil {
+		// Its own, empty: the copied config already points at the same path.
+		sq := *parent.SQLite
+		sq.Volume, sq.CreatedAt = state.SQLiteVolume(name), time.Now()
+		dev.SQLite = &sq
+	}
 	penv, err := d.Store.Env(parent.Name)
 	if err != nil {
 		return nil, err
@@ -103,6 +109,12 @@ func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out
 		}
 	}()
 	fmt.Fprintf(out, "-----> Creating %s, the %s of %s (its own data; config copied from %s)\n", name, kind, parent.Name, parent.Name)
+	if dev.SQLite != nil {
+		if err := d.Deployer.SQLitePrepare(ctx, dev.SQLite.Volume); err != nil {
+			return nil, fmt.Errorf("%s SQLite volume: %w", kind, err)
+		}
+		fmt.Fprintf(out, "-----> %s → its own SQLite database (empty; the release command sets it up)\n", dev.SQLite.EnvVar)
+	}
 	for _, l := range links {
 		switch l.kind {
 		case "pg":

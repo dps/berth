@@ -19,9 +19,9 @@ import (
 func cmdScale() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ps:scale <app> <type>=<n>...",
-		Short: "Run n containers of a Procfile worker type (0 stops it)",
+		Short: "Run n of a Procfile worker type (0 stops it)",
 		Long: "Process types in the Procfile other than web and release (worker: node worker.js) run as\n" +
-			"workers, one container each by default, restarted if they exit.",
+			"workers inside the app's container, one of each by default, restarted if they exit.",
 		Example: "  berth ps:scale myapp worker=2\n  berth ps:scale myapp clock=0",
 		Args:    cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

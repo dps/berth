@@ -25,6 +25,32 @@ type Fake struct {
 	RunWithErr error // returned by RunWith (e.g. a failing network probe)
 	// RunWithHook, when set, runs in place of a foreground container.
 	RunWithHook func(o RunOpts, stdout io.Writer) error
+	// ExecHook, when set, runs in place of an exec.
+	ExecHook func(name string, args []string, stdout io.Writer) error
+}
+
+// exclusiveVolume is the error Apple's container gives when a named volume
+// is already attached to a running VM (a volume is an ext4 disk image, and
+// one VM at a time can attach it). Bind mounts (absolute host paths) can be
+// shared.
+func (f *Fake) exclusiveVolume(o RunOpts) error {
+	for _, v := range o.Volumes {
+		src, _, _ := strings.Cut(v, ":")
+		if strings.HasPrefix(src, "/") {
+			continue
+		}
+		for name, c := range f.Containers {
+			if c.state != "running" {
+				continue
+			}
+			for _, cv := range c.opts.Volumes {
+				if csrc, _, _ := strings.Cut(cv, ":"); csrc == src {
+					return fmt.Errorf("volume %s is attached to %s: The storage device attachment is invalid", src, name)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type fakeContainer struct {
@@ -102,6 +128,9 @@ func (f *Fake) Run(ctx context.Context, o RunOpts) error {
 	if _, ok := f.Containers[o.Name]; ok {
 		return fmt.Errorf("container %s already exists", o.Name)
 	}
+	if err := f.exclusiveVolume(o); err != nil {
+		return err
+	}
 	behaviour, ok := f.ImageSet[o.Image]
 	if !ok {
 		behaviour = "ok"
@@ -141,6 +170,12 @@ func (c *fakeContainer) serve(behaviour string) error {
 
 func (f *Fake) RunWith(ctx context.Context, o RunOpts, stdin io.Reader, stdout io.Writer) error {
 	f.record("runwith " + o.Image + " " + strings.Join(o.Args, " "))
+	f.mu.Lock()
+	err := f.exclusiveVolume(o)
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if f.RunWithErr != nil {
 		return f.RunWithErr
 	}
@@ -227,6 +262,16 @@ func (f *Fake) Logs(ctx context.Context, name string, follow bool, tail int, w i
 
 func (f *Fake) Exec(ctx context.Context, name string, args []string, interactive, tty bool, stdin io.Reader, stdout, stderr io.Writer) error {
 	f.record("exec " + name + " " + strings.Join(args, " "))
+	f.mu.Lock()
+	c, ok := f.Containers[name]
+	running := ok && c.state == "running"
+	f.mu.Unlock()
+	if !running {
+		return fmt.Errorf("container %s is not running", name)
+	}
+	if f.ExecHook != nil {
+		return f.ExecHook(name, args, stdout)
+	}
 	return nil
 }
 
@@ -280,4 +325,15 @@ func (f *Fake) VolumeExists(ctx context.Context, name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.VolumeSet[name]
+}
+
+// Opts returns the options a container was run with.
+func (f *Fake) Opts(name string) (RunOpts, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.Containers[name]
+	if !ok {
+		return RunOpts{}, false
+	}
+	return c.opts, true
 }

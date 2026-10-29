@@ -28,8 +28,9 @@ remote. If the remote is missing, ask the user to run
 2. Read configuration and secrets from environment variables. Never commit
    secrets: set them with `berth config:set {{.App}} KEY=value` (the app
    restarts) and `berth config:set {{.App}}-dev KEY=value` for the dev version.
-3. Write files only to `/tmp` or a mounted folder
-   (`berth storage:mount {{.App}} /data`); everything else is reset on each deploy.
+3. Write files only to `/tmp`, a mounted folder
+   (`berth storage:mount {{.App}} /uploads`) or the SQLite database (below);
+   everything else is reset on each deploy.
 4. Log to stdout and stderr.
 
 A deploy switches traffic once `/` answers with a status below 500 (set
@@ -40,9 +41,10 @@ and builds it; a `Dockerfile` at the repo root replaces that, and
 ### Background work
 
 - **Workers**: a line in the `Procfile` other than `web` and `release`, such
-  as `worker: node worker.js`, runs as its own container next to the web
-  process, from the same build and config, restarted if it exits. A web
-  process is still required. `berth ps:scale {{.App}} worker=2` runs more.
+  as `worker: node worker.js`, runs as another process inside the app's
+  container (same build, config and storage), restarted if it exits. It shares
+  the app's memory. A web process is still required. `berth ps:scale
+  {{.App}} worker=2` runs more; each sees its name in `BERTH_PROCESS`.
 - **Scheduled jobs**: a `"cron"` list in `app.json`, for example
   `{"cron": [{"command": "node digest.js", "schedule": "0 7 * * *"}]}`, in the
   Mac's local time. Each run is a fresh container; a run still going when the
@@ -65,6 +67,11 @@ and builds it; a `Dockerfile` at the repo root replaces that, and
   sets `DATABASE_URL`. Redis: `berth redis:create` and `redis:link` set
   `REDIS_URL`. The dev version gets its own empty database, never production's;
   `berth dev:db:copy {{.App}} -y` loads a copy of production's data.
+- SQLite: `berth sqlite:add {{.App}}` sets `DATABASE_URL=sqlite:////data/sqlite/app.db`
+  and `SQLITE_PATH=/data/sqlite/app.db`; open that file, never one in a mounted
+  folder. The app then runs in one container at a time: deploys stop the old
+  version first, and scheduled jobs run inside the app, like its workers, so
+  both can open the database. `berth sqlite:shell {{.App}}-dev` opens it. The dev version has its own.
 - Schema changes are migrations, run by a `release:` line in a `Procfile`
   (for example `release: npm run migrate`) on every deploy, before the new
   code takes traffic. While a deploy swaps over, the old code runs against the

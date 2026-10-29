@@ -8,6 +8,7 @@ package caddy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -39,6 +40,10 @@ type Route struct {
 	Placeholder string
 	DownBody    string
 	NoIndex     bool
+	// TryDuration is how long a request waits for the app to accept a
+	// connection (default 5s): an app with SQLite is stopped before its
+	// new release starts, so requests wait out the gap.
+	TryDuration string
 }
 
 type Options struct {
@@ -355,7 +360,7 @@ func appHandlers(r Route, o Options) []any {
 				"resolver":     obj{"addresses": []string{"udp/" + o.DNSAddr}},
 			},
 			// Retry refused connections (a release restarting in place).
-			"load_balancing": obj{"try_duration": "5s", "try_interval": "100ms"},
+			"load_balancing": obj{"try_duration": cmp.Or(r.TryDuration, "5s"), "try_interval": "100ms"},
 			// No pooled connections to a release that may be stopping.
 			"transport": obj{"protocol": "http", "keep_alive": obj{"enabled": false}},
 		},

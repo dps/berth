@@ -28,6 +28,10 @@ func (d *Deployer) RunJob(ctx context.Context, appName string, rel *state.Releas
 		return err
 	}
 	env, _ := d.Store.Env(appName)
+	timeout := time.Duration(env.IntSetting(state.KeyCronTimeout, 3600)) * time.Second
+	if app.SQLite != nil {
+		return d.execJob(ctx, appName, rel.Cron[idx-1].Command, timeout, w)
+	}
 	opts, err := d.oneOffOpts(app, cfg, rel, env, "cron")
 	if err != nil {
 		return err
@@ -35,12 +39,32 @@ func (d *Deployer) RunJob(ctx context.Context, appName string, rel *state.Releas
 	opts.Name = fmt.Sprintf("%s-cron%d-%s", state.ContainerName(app.Name, rel.N), idx, strconv.FormatInt(time.Now().UnixMilli()%1_000_000, 36))
 	opts.Entrypoint, opts.Args = "/bin/sh", []string{"-c", rel.Cron[idx-1].Command}
 	opts.Remove, opts.Stderr = true, w
-	timeout := time.Duration(env.IntSetting(state.KeyCronTimeout, 3600)) * time.Second
 	jctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err = d.RT.RunWith(jctx, opts, nil, w)
 	if err != nil {
 		d.RT.Remove(context.Background(), opts.Name)
+		if jctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timed out after %s (%s raises it)", timeout, state.KeyCronTimeout)
+		}
+		if m := exitStatusRe.FindStringSubmatch(err.Error()); m != nil {
+			return fmt.Errorf("exited with status %s", m[1])
+		}
+	}
+	return err
+}
+
+// execJob runs a job inside the app's running web container: an app with
+// SQLite has its database open in that one container only.
+func (d *Deployer) execJob(ctx context.Context, appName, command string, timeout time.Duration, w io.Writer) error {
+	cur := d.Store.CurrentRelease(appName)
+	if cur == nil || cur.Container == "" {
+		return fmt.Errorf("%s isn't running, and its jobs run inside its web container (it has SQLite)", appName)
+	}
+	jctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := d.RT.Exec(jctx, cur.Container, []string{"/bin/sh", "-c", command}, false, false, nil, w, w)
+	if err != nil {
 		if jctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("timed out after %s (%s raises it)", timeout, state.KeyCronTimeout)
 		}

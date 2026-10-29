@@ -427,8 +427,8 @@ func cmdStorageMount() *cobra.Command {
 	var noRestart bool
 	c := &cobra.Command{
 		Use:     "storage:mount <app> <container-path>",
-		Short:   "Persist a folder across deploys (SQLite, uploads)",
-		Example: "  berth storage:mount myapp /data   # then DATABASE_PATH=/data/app.db",
+		Short:   "Persist a folder across deploys (uploads, files; SQLite: sqlite:add)",
+		Example: "  berth storage:mount myapp /uploads",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := appArg(args)

@@ -35,9 +35,10 @@ type AppStatus struct {
 	Links       []string        `json:"links,omitempty"`
 	Workers     []ProcessStatus `json:"workers,omitempty"`
 	CronJobs    int             `json:"cron_jobs,omitempty"`
+	SQLite      bool            `json:"sqlite,omitempty"`
 }
 
-// ProcessStatus is one worker container (worker.1).
+// ProcessStatus is one worker (worker.1), a process in the web container.
 type ProcessStatus struct {
 	Name        string    `json:"name"`
 	Command     string    `json:"command"`
@@ -185,7 +186,7 @@ func (d *Daemon) Status(ctx context.Context) (*Status, error) {
 	apps, _ := d.Store.Apps()
 	for _, a := range apps {
 		env, _ := d.Store.Env(a.Name)
-		as := AppStatus{Name: a.Name, URLs: AppURLs(cfg, a), Repo: a.Repo, Branch: a.Branch, Private: a.Private, Links: a.Links,
+		as := AppStatus{Name: a.Name, URLs: AppURLs(cfg, a), Repo: a.Repo, Branch: a.Branch, Private: a.Private, Links: a.Links, SQLite: a.SQLite != nil,
 			MemoryLimit: env.StrSetting(state.KeyMemory, cfg.DefaultMemory)}
 		rs, _ := d.Store.Releases(a.Name)
 		if len(rs) > 0 {
@@ -220,17 +221,7 @@ func (d *Daemon) Status(ctx context.Context) (*Status, error) {
 				sys.MemCommitted += ParseMemory(as.MemoryLimit)
 			}
 			as.CronJobs = len(cur.Cron)
-			for _, w := range cur.Workers {
-				ps := ProcessStatus{Name: w.Name(), Command: cur.Processes[w.Type]}
-				if c, ok := runtime.Find(cs, w.Container); ok && c.Running() {
-					ps.Running, ps.Since = true, c.StartedAt
-					sys.MemCommitted += ParseMemory(as.MemoryLimit)
-				}
-				if s, ok := stats[w.Container]; ok {
-					ps.MemoryBytes = s.MemoryBytes
-				}
-				as.Workers = append(as.Workers, ps)
-			}
+			as.Workers = d.workerStatus(a.Name)
 		}
 		st.Apps = append(st.Apps, as)
 	}

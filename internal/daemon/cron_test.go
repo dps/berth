@@ -30,7 +30,7 @@ func commitFiles(t *testing.T, repo string, files map[string]string) {
 	}
 }
 
-func TestWorkersAndCronOnTheDaemon(t *testing.T) {
+func TestCronOnTheDaemon(t *testing.T) {
 	d, rt, repo := newTestDaemon(t)
 	commitFiles(t, repo, map[string]string{
 		"Procfile": "worker: node worker.js\n",
@@ -40,35 +40,6 @@ func TestWorkersAndCronOnTheDaemon(t *testing.T) {
 	if _, err := d.hCreate(d.ctx, params, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	cur := d.Store.CurrentRelease("web")
-	if len(cur.Workers) != 1 {
-		t.Fatalf("workers %+v", cur.Workers)
-	}
-
-	// The supervisor restarts a worker that exits, and logs it.
-	d.supervise(d.ctx)
-	rt.Crash(cur.Workers[0].Container)
-	d.supervise(d.ctx)
-	after := d.Store.CurrentRelease("web")
-	cs, _ := rt.List(d.ctx)
-	if c, ok := runtime.Find(cs, after.Workers[0].Container); after.Workers[0].Container == cur.Workers[0].Container || !ok || !c.Running() {
-		t.Fatalf("worker not restarted: %+v", after.Workers)
-	}
-	evs, _ := os.ReadFile(d.Store.EventsPath())
-	if !strings.Contains(string(evs), "worker.1 (v1) is not running") {
-		t.Fatalf("events:\n%s", evs)
-	}
-	// It survives orphan cleanup.
-	d.removeOrphans(d.ctx, cs)
-	running := false
-	cs, _ = rt.List(d.ctx)
-	if c, ok := runtime.Find(cs, after.Workers[0].Container); ok && c.Running() {
-		running = true
-	}
-	if !running {
-		t.Fatal("orphan cleanup removed a worker")
-	}
-
 	// Cron: the 07:30 job fires at 07:30 only; failures are logged and evented.
 	rt.RunWithHook = func(o runtime.RunOpts, stdout io.Writer) error {
 		io.WriteString(stdout, "ran "+o.Args[1]+"\n")

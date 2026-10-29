@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,12 +37,32 @@ func (d *Daemon) releaseBackup(ctx context.Context, app *state.App, rel *state.R
 		fmt.Fprintf(out, "-----> Backed up pg:%s before the release command (%.1fs%s)\n", name, time.Since(start).Seconds(), size)
 		backups[link] = path
 	}
+	if app.SQLite != nil {
+		path, err := d.sqliteReleaseBackup(ctx, app, rel, out)
+		switch {
+		case errors.Is(err, errNoSQLiteFile):
+		case err != nil:
+			return nil, fmt.Errorf("SQLite: %w", err)
+		default:
+			backups["sqlite"] = path
+		}
+	}
 	return backups, nil
 }
 
 // restoreData replaces each database with its pre-release dump.
 func (d *Daemon) restoreData(ctx context.Context, app *state.App, backups map[string]string, out io.Writer) error {
 	for link, file := range backups {
+		if link == "sqlite" {
+			// Rollback holds the app's lock.
+			err := d.Deployer.PausedLocked(ctx, app.Name, out, func(ctx context.Context, _ bool) error {
+				return d.sqliteReplace(ctx, app, file, out)
+			})
+			if err != nil {
+				return fmt.Errorf("sqlite: %w", err)
+			}
+			continue
+		}
 		name, ok := strings.CutPrefix(link, "pg:")
 		if !ok {
 			continue
