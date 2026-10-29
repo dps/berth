@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Berth: a dead simple PaaS for Mac minis</title>
-<meta name="description" content="Push to GitHub and your app is live in seconds, in its own little VM on a Mac mini in your closet. Postgres is one command away. Open source.">
-<meta property="og:title" content="Berth: a dead simple PaaS for Mac minis">
-<meta property="og:description" content="Push to GitHub and your app is live in seconds, on a Mac mini in your closet.">
+<title>Berth: a home for the apps your agent builds</title>
+<meta name="description" content="Berth hosts vibe coded apps on a Mac mini in your closet: each at its own https address, with a database, sign-in, a dev version your coding agent can test on, and no monthly bill per app. Open source.">
+<meta property="og:title" content="Berth: a home for the apps your agent builds">
+<meta property="og:description" content="Open source hosting for vibe coded apps, on a Mac mini in your closet. Push to GitHub and it's live in seconds.">
 <meta property="og:url" content="https://berth.computer/">
 <meta property="og:image" content="https://berth.computer/assets/icon.png">
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
@@ -26,12 +26,12 @@
   <div class="wrap">
     <section class="hero">
       <div>
-        <p class="eyebrow">Open source · for Apple Silicon Macs</p>
-        <h1>Push to GitHub. It's live on the Mac in your closet.</h1>
-        <p class="lede">Berth is a dead simple PaaS for Mac minis. A few seconds after you push, your app is running in its own little VM at <code>https://myapp.yourdomain.com</code>. Postgres is one command away, and there's no monthly bill per app.</p>
+        <p class="eyebrow">Open source hosting for vibe coded apps</p>
+        <h1>Your agent built it. Berth gives it a home.</h1>
+        <p class="lede">Claude Code, Codex and Cursor can build a working app in an afternoon. Berth runs every one of them on a Mac mini in your closet, each at its own <code>https://myapp.yourdomain.com</code>, with a real database, sign-in and backups. Push to GitHub and it's live in seconds. There's no monthly bill per app, so the twentieth weekend project costs the same as the first.</p>
         <div class="actions">
           <a class="button primary" href="/docs/setting-up/">Set up a Mac</a>
-          <a class="button secondary" href="/docs/">Read the docs</a>
+          <a class="button secondary" href="#with-your-agent">See how it works with an agent</a>
         </div>
       </div>
       <div class="terminal" role="img" aria-label="A terminal showing berth deploy building and releasing an app in a few seconds">
@@ -50,10 +50,37 @@
     </section>
   </div>
 
+  <section class="band" id="with-your-agent">
+    <div class="wrap install loop">
+      <div>
+        <h2>Made for working with a coding agent</h2>
+        <p class="intro">Most hosting assumes a person typed every line. Berth assumes your agent did, and gives it somewhere safe to try things.</p>
+        <ol>
+          <li><strong><code>berth new habits</code></strong> A starter app, a private GitHub repo, the first deploy, and an <code>AGENTS.md</code> that teaches your agent how Berth works, with your app's real URLs in it.</li>
+          <li><strong>Ask your agent for what you want.</strong> It tries each change on <code>habits-dev</code> with <code>berth dev:push</code>, live in about five seconds, then checks the page, reads the logs and fixes its own mistakes. On its own copy of the data.</li>
+          <li><strong>Look at it, then <code>git push</code>.</strong> Production only changes when you push. <code>AGENTS.md</code> tells the agent to ask you before it pushes to <code>main</code>, rolls back or changes production config.</li>
+        </ol>
+      </div>
+<pre class="no-copy">berth new habits         <span class="c"># starter app, repo, deploy</span>
+cd habits && claude      <span class="c"># or codex, cursor…</span>
+
+<span class="c">&gt; add a daily streak and a chart
+  of the last 30 days</span>
+
+<span class="c"># the agent edits, then:</span>
+berth dev:push --json    <span class="c"># live on habits-dev</span>
+berth logs habits-dev    <span class="c"># sees an error, fixes it</span>
+berth dev:push --json    <span class="c"># exit code 0: it works</span>
+
+<span class="c"># you take a look, then:</span>
+git push                 <span class="c"># live on habits.example.com</span></pre>
+    </div>
+  </section>
+
   <section class="band">
     <div class="wrap install">
       <div>
-        <h2>Three commands, then just <code>git push</code></h2>
+        <h2>Setting up the Mac: three commands</h2>
         <p class="intro">No ports opened on your router, no certificates, no YAML, no Docker Desktop, and no <code>sudo</code> once it's set up.</p>
         <ol>
           <li><strong>Install it on the Mac.</strong> Homebrew brings Apple's <code>container</code> runtime, Caddy and cloudflared along with it.</li>
@@ -73,40 +100,40 @@ git push                             <span class="c"># every deploy after that</
 
   <section class="band">
     <div class="wrap">
-      <h2>The boring parts, done once</h2>
-      <p class="intro">Each piece of Berth exists because something was annoying without it.</p>
+      <h2>What an agent-built app needs, done once</h2>
+      <p class="intro">An agent can write the app. It shouldn't have to write the hosting too: the OAuth flow, the backup script, the API key handling. Those are where vibe coded apps usually go wrong, so Berth does them.</p>
       <div class="features">
-        <a class="feature" href="/docs/releases-and-rollbacks/">
-          <h3>Deploys without downtime</h3>
-          <p>The new release has to answer before it gets traffic, and the old one drains. Every deploy is a numbered release you can roll back to.</p>
+        <a class="feature" href="/docs/dev-versions/">
+          <h3>A place for the agent to test</h3>
+          <p>Every app has <code>myapp-dev</code>, with its own data. The agent pushes uncommitted work there and checks it really works, and exit codes tell it what broke.</p>
         </a>
         <a class="feature" href="/docs/postgres-and-redis/">
-          <h3>Postgres, Redis and SQLite</h3>
-          <p>One command each, linked into the app's config. Dumped every night, and again before every migration runs.</p>
+          <h3>A database that's hard to lose</h3>
+          <p>Postgres, Redis or SQLite with one command. Dumped every night and again before every migration, and the dev version can't reach production's.</p>
         </a>
-        <a class="feature" href="/docs/dev-versions/">
-          <h3>A dev version for your agent</h3>
-          <p>Every app gets <code>myapp-dev</code>, with its own copy of the data. A coding agent can push uncommitted work there and check it really works.</p>
+        <a class="feature" href="/docs/sign-in-with-google/">
+          <h3>Sign-in without writing OAuth</h3>
+          <p>Put an app behind Google sign-in for everyone or just the people you name. The app reads a header, and agents get test tokens.</p>
+        </a>
+        <a class="feature" href="/docs/ai-for-your-apps/">
+          <h3>AI without leaking keys</h3>
+          <p>Apps call one gateway on the Mac, so your API keys never end up in the code. Each app has a budget, and dev versions only reach local models.</p>
+        </a>
+        <a class="feature" href="/docs/releases-and-rollbacks/">
+          <h3>Mistakes you can undo</h3>
+          <p>A new release has to answer before it gets traffic, so a broken build never goes live. <code>berth rollback</code> goes back in about two seconds.</p>
+        </a>
+        <a class="feature" href="/docs/deploying-an-app/">
+          <h3>Whatever the agent picked</h3>
+          <p>Node, Bun, Python, Go, Rust, a static site or anything with a Dockerfile, with workers and cron jobs. Not just a frontend.</p>
         </a>
         <a class="feature" href="/docs/pull-request-previews/">
           <h3>Pull request previews</h3>
-          <p>Each pull request gets its own address, posted as a comment on the PR, and goes away when it closes.</p>
-        </a>
-        <a class="feature" href="/docs/sign-in-with-google/">
-          <h3>Sign in with Google</h3>
-          <p>Put any app behind Google sign-in: for everyone, for a list of people, or only on the pages that need it. Your app just reads a header.</p>
-        </a>
-        <a class="feature" href="/docs/workers-and-scheduled-jobs/">
-          <h3>Workers and cron</h3>
-          <p>Procfile workers run beside your web process and come back if they crash. Scheduled jobs come from <code>app.json</code>.</p>
-        </a>
-        <a class="feature" href="/docs/ai-for-your-apps/">
-          <h3>AI for every app</h3>
-          <p>One gateway for small models running on the Mac and cloud models with your keys, with a budget and usage for each app.</p>
+          <p>Each pull request, from you or an agent, gets its own address, posted as a comment on the PR. It goes away when the PR closes.</p>
         </a>
         <a class="feature" href="/docs/the-admin-page/">
-          <h3>An admin page</h3>
-          <p>Every app's health, requests, latency and errors, plus the Mac's load, at <code>admin.yourdomain.com</code>, for the owners you name.</p>
+          <h3>One page for every app</h3>
+          <p>Every app's health, requests, latency and errors, plus the Mac's load, at <code>admin.yourdomain.com</code>.</p>
         </a>
         <a class="feature" href="/docs/backups-and-moving-to-a-new-mac/">
           <h3>Backups that leave the house</h3>
@@ -153,7 +180,7 @@ git push                             <span class="c"># every deploy after that</
       </div>
       <div>
         <p>It's one Mac. There's no failover, and if the power goes out while you're on holiday, your apps are down until it comes back.</p>
-        <p>That's the right trade for side projects, internal tools, family apps and prototypes. It's the wrong one for anything where an hour of downtime costs real money.</p>
+        <p>That's the right trade for vibe coded apps, side projects, internal tools, family apps and prototypes. It's the wrong one for anything where an hour of downtime costs real money.</p>
       </div>
     </div>
   </section>

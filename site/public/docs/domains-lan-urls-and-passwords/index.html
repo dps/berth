@@ -114,7 +114,10 @@ your Cloudflare account, log in to that zone once (it opens the browser) and
 then add it:</p>
 <pre><code class="language-bash">berth cf:login mysite.com
 berth domains:add myapp www.mysite.com
+berth domains:add myapp mysite.com          # the bare domain works too
 </code></pre>
+<p>If you added a domain before its zone was connected, run the same
+<code>domains:add</code> again after <code>cf:login</code> to create its DNS record.</p>
 <p>Berth creates the DNS record and updates the tunnel live. It won't replace a
 record that's already there (say <code>www</code> points at your old host) unless you
 add <code>--force</code>. If the domain's DNS lives somewhere else, <code>domains:add</code> prints

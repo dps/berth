@@ -755,10 +755,16 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 	if cfg.NoTunnel {
 		return nil, fmt.Errorf("custom domains need the Cloudflare tunnel (berth was set up with --no-tunnel)")
 	}
+	// Adding a domain the app already has redoes its DNS: that's how one
+	// added before its zone was connected (berth cf:login) gets its record.
+	again := false
 	apps, _ := d.Store.Apps()
 	for _, a := range apps {
 		if slices.Contains(a.Domains, p.Host) {
-			return nil, fmt.Errorf("%s is already attached to %s", p.Host, a.Name)
+			if a.Name != p.App {
+				return nil, fmt.Errorf("%s is already attached to %s", p.Host, a.Name)
+			}
+			again = true
 		}
 	}
 	// DNS first: if the hostname already points somewhere, stop before
@@ -766,8 +772,10 @@ func (d *Daemon) hDomainsAdd(ctx context.Context, params json.RawMessage, out io
 	if err := d.addDomainDNS(ctx, cfg, p.Host, p.Force, out); err != nil {
 		return nil, err
 	}
-	if err := d.updateApp(p.App, func(a *state.App) { a.Domains = append(a.Domains, p.Host) }); err != nil {
-		return nil, err
+	if !again {
+		if err := d.updateApp(p.App, func(a *state.App) { a.Domains = append(a.Domains, p.Host) }); err != nil {
+			return nil, err
+		}
 	}
 	if err := d.Apply(ctx); err != nil {
 		return nil, err

@@ -734,7 +734,11 @@ then add it:
 ```bash
 berth cf:login mysite.com
 berth domains:add myapp www.mysite.com
+berth domains:add myapp mysite.com          # the bare domain works too
 ```
+
+If you added a domain before its zone was connected, run the same
+`domains:add` again after `cf:login` to create its DNS record.
 
 Berth creates the DNS record and updates the tunnel live. It won't replace a
 record that's already there (say `www` points at your old host) unless you
