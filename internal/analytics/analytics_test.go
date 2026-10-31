@@ -151,3 +151,36 @@ func TestTailer(t *testing.T) {
 		t.Fatalf("after rotation %d", r.Totals.Req)
 	}
 }
+
+func TestPageView(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	for _, c := range []struct {
+		path   string
+		status int
+		ua     string
+		want   bool
+	}{
+		{"/", 200, chrome, true},
+		{"/docs/sqlite/", 200, iphone, true},
+		{"/about.html", 200, chrome, true},
+		{"/docs/v1.2/intro", 200, chrome, true}, // the dot isn't in the last segment
+		{"/", 304, chrome, true},
+		{"/assets/site.css", 200, chrome, false},
+		{"/assets/mac-mini.svg", 200, chrome, false},
+		{"/missing", 404, chrome, false},
+		{"/", 500, chrome, false},
+		{"/", 200, gbot, false},
+		{"/", 200, "curl/8.7.1", false},
+		{"/.berth/signin", 200, chrome, false},
+	} {
+		r, _ := Parse([]byte(line(now, c.path, c.status, 1, c.ua, "1.2.3.4", "", "")))
+		if got := r.PageView(); got != c.want {
+			t.Errorf("%s %d %q: PageView %v, want %v", c.path, c.status, c.ua, got, c.want)
+		}
+	}
+	r, _ := Parse([]byte(line(now, "/", 200, 1, chrome, "1.2.3.4", "", "")))
+	r.Method = "POST"
+	if r.PageView() {
+		t.Error("a POST is a page view")
+	}
+}

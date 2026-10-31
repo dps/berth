@@ -120,6 +120,33 @@ func cmdNotifySet() *cobra.Command {
 	}
 }
 
+func cmdOnVisitSet() *cobra.Command {
+	var apps []string
+	c := &cobra.Command{
+		Use:   "on-visit:set <command|off>",
+		Short: "Run a command on the Mac when someone opens a page (flash a blink(1), ring a bell)",
+		Long: `Run a shell command on the Mac each time someone opens a page of your
+apps: a GET from a browser for a page, not its images or scripts, and not
+bots. It runs one at a time; page views that arrive meanwhile are counted
+in BERTH_VISITS for the next run. BERTH_APP, BERTH_HOST, BERTH_PATH,
+BERTH_COUNTRY, BERTH_REFERRER and BERTH_MOBILE describe the latest one.
+
+  berth on-visit:set 'blink1-tool -q --rgb=0,90,255 --blink 1'
+  berth on-visit:set 'blink1-tool -q --blink 1' --app site
+  berth on-visit:set off`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			command := args[0]
+			if command == "off" {
+				command = ""
+			}
+			return call("onvisit.set", map[string]any{"command": command, "apps": apps}, nil)
+		},
+	}
+	c.Flags().StringSliceVar(&apps, "app", nil, "only page views of this app (repeat or comma-separate for more)")
+	return c
+}
+
 func cmdReboot() *cobra.Command {
 	var yes bool
 	c := &cobra.Command{

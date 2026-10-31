@@ -91,6 +91,18 @@ func Parse(line []byte) (Request, bool) {
 	return r, true
 }
 
+// PageView reports whether r looks like a person opening a page: a GET
+// that worked, from a browser, for a path with no file extension (or
+// .html). A page's stylesheet, scripts and images aren't page views.
+func (r Request) PageView() bool {
+	if r.Bot || r.Method != "GET" || (r.Status/100 != 2 && r.Status != 304) || strings.HasPrefix(r.Path, "/.") {
+		return false
+	}
+	last := r.Path[strings.LastIndexByte(r.Path, '/')+1:]
+	i := strings.LastIndexByte(last, '.')
+	return i < 0 || last[i:] == ".html" || last[i:] == ".htm"
+}
+
 var botWords = []string{"bot", "crawl", "spider", "slurp", "preview", "monitor", "uptime", "headless", "scan", "facebookexternalhit", "python", "go-http-client", "curl/", "wget/", "httpie", "axios", "node-fetch", "undici", "okhttp", "java/", "libwww"}
 
 // classify names the browser family from a User-Agent, and spots mobiles

@@ -1121,6 +1121,26 @@ You hear about deploys that succeed or fail, apps or workers stuck
 crash-looping, scheduled jobs that fail, and nightly or off-Mac backups that
 fail. `notify:set` sends a test message first.
 
+### A light for every visit
+
+The Mac can tell you when someone opens a page. Plug a
+[blink(1)](https://blink1.thingm.com) USB light into it and:
+
+```bash
+brew install blink1
+berth on-visit:set 'blink1-tool -q --rgb=0,90,255 --blink 1'
+berth on-visit:set 'blink1-tool -q --blink 1' --app site    # just one app
+berth on-visit:set off
+```
+
+It's any shell command, run on the Mac when a browser opens a page of your
+apps: a page, not its images or scripts, and not bots. It runs one at a time,
+and page views that arrive meanwhile are counted for the next run, so a
+burst of traffic is a few blinks, not hundreds. `BERTH_VISITS` is how many,
+and `BERTH_APP`, `BERTH_HOST`, `BERTH_PATH`, `BERTH_COUNTRY`,
+`BERTH_REFERRER` and `BERTH_MOBILE` describe the latest. `on-visit:set`
+runs it once to try it.
+
 ### Reboots and FileVault
 
 This is the one real trade-off. With FileVault on, macOS turns off automatic
@@ -1351,6 +1371,7 @@ agents want. `berth <command> --help` has more on each.
 | `berth backup [file]` · `berth restore <file>` | archive and restore everything |
 | `berth offsite:setup` · `offsite:status` · `offsite:run` · `offsite:get [backup]` · `offsite:key` · `offsite:off` | encrypted nightly backups to S3-compatible storage |
 | `berth notify:set <url\|off>` | notifications |
+| `berth on-visit:set <command\|off> [--app a]` | run a command on the Mac on page views (a blink(1)) |
 | `berth gc` | clean up old images, dumps and build files |
 | `berth reboot` | planned reboot that comes back with nobody there |
 | `berth reload` | re-read `~/.berth` after you've edited files by hand |

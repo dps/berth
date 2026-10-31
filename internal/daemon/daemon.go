@@ -71,6 +71,7 @@ type Daemon struct {
 	ai            *ai.Gateway  // AI gateway; nil until Run
 	authKey       ed25519.PrivateKey
 	stats         *analytics.Stats // request analytics from access logs; nil until Run
+	visits        *visitHook       // runs the on-visit command; nil until Run
 	statusCache   statusCache
 	load          loadMonitor     // system load, sampled every loadEvery
 	cronRunning   map[string]bool // app/job index → a run in progress

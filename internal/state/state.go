@@ -56,20 +56,22 @@ func (s *Store) EventsPath() string       { return s.Path("events.log") }
 
 // Config is ~/.berth/config.json.
 type Config struct {
-	Domain       string `json:"domain"`
-	Hostname     string `json:"hostname"` // short Mac hostname, for <app>.<hostname>.local
-	NoTunnel     bool   `json:"no_tunnel,omitempty"`
-	Unattended   bool   `json:"unattended,omitempty"`
-	CFIPFilter   bool   `json:"cf_ip_filter,omitempty"`
-	TunnelID     string `json:"tunnel_id,omitempty"`
-	TunnelName   string `json:"tunnel_name,omitempty"`
-	TunnelRemote bool   `json:"tunnel_remote,omitempty"` // cloudflared runs with the tunnel token and follows the remote ingress
-	CFAccountID  string `json:"cf_account_id,omitempty"`
-	CFZoneID     string `json:"cf_zone_id,omitempty"`
-	GitHubUser   string `json:"github_user,omitempty"`
-	NotifyURL    string `json:"notify_url,omitempty"`
-	Network      string `json:"network"`
-	Gateway      string `json:"gateway,omitempty"` // berth network gateway; services publish here
+	Domain       string   `json:"domain"`
+	Hostname     string   `json:"hostname"` // short Mac hostname, for <app>.<hostname>.local
+	NoTunnel     bool     `json:"no_tunnel,omitempty"`
+	Unattended   bool     `json:"unattended,omitempty"`
+	CFIPFilter   bool     `json:"cf_ip_filter,omitempty"`
+	TunnelID     string   `json:"tunnel_id,omitempty"`
+	TunnelName   string   `json:"tunnel_name,omitempty"`
+	TunnelRemote bool     `json:"tunnel_remote,omitempty"` // cloudflared runs with the tunnel token and follows the remote ingress
+	CFAccountID  string   `json:"cf_account_id,omitempty"`
+	CFZoneID     string   `json:"cf_zone_id,omitempty"`
+	GitHubUser   string   `json:"github_user,omitempty"`
+	NotifyURL    string   `json:"notify_url,omitempty"`
+	OnVisit      string   `json:"on_visit,omitempty"`      // a shell command berthd runs on page views (berth on-visit:set)
+	OnVisitApps  []string `json:"on_visit_apps,omitempty"` // only these apps' page views; empty is all of them
+	Network      string   `json:"network"`
+	Gateway      string   `json:"gateway,omitempty"` // berth network gateway; services publish here
 
 	WebhookAddr    string `json:"webhook_addr"`   // 127.0.0.1:7777
 	CaddyAdmin     string `json:"caddy_admin"`    // 127.0.0.1:2019

@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/dps/berth/internal/analytics"
 	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/gitx"
 	"github.com/dps/berth/internal/rpc"
@@ -98,6 +99,7 @@ func (d *Daemon) handlers() map[string]handler {
 		"backup":          d.hBackup,
 		"restore":         d.hRestore,
 		"notify.set":      d.hNotifySet,
+		"onvisit.set":     d.hOnVisitSet,
 		"app.setkey":      d.hSetKey,
 		"git.hook":        d.hGitHook,
 		"dockerfile":      d.hDockerfile,
@@ -1249,6 +1251,51 @@ func (d *Daemon) hNotifySet(ctx context.Context, params json.RawMessage, out io.
 	}
 	fmt.Fprintln(out, "-----> Sent a test notification")
 	return map[string]string{"url": p.URL}, nil
+}
+
+// hOnVisitSet sets the command berthd runs on page views (visits.go), and
+// runs it once so you can see it work.
+func (d *Daemon) hOnVisitSet(ctx context.Context, params json.RawMessage, out io.Writer) (any, error) {
+	var p struct {
+		Command string   `json:"command"`
+		Apps    []string `json:"apps"`
+	}
+	if err := decode(params, &p); err != nil {
+		return nil, err
+	}
+	for _, a := range p.Apps {
+		if _, err := d.Store.App(a); err != nil {
+			return nil, err
+		}
+	}
+	cfg, err := d.Store.Config()
+	if err != nil {
+		return nil, err
+	}
+	cfg.OnVisit, cfg.OnVisitApps = p.Command, p.Apps
+	if p.Command == "" {
+		cfg.OnVisitApps = nil
+	}
+	if err := d.Store.SaveConfig(cfg); err != nil {
+		return nil, err
+	}
+	if p.Command == "" {
+		fmt.Fprintln(out, "-----> On-visit command off")
+		return map[string]string{"command": ""}, nil
+	}
+	which := "every app"
+	if len(p.Apps) > 0 {
+		which = strings.Join(p.Apps, ", ")
+	}
+	fmt.Fprintf(out, "-----> Running it once to try it\n")
+	tctx, cancel := context.WithTimeout(ctx, visitHookTimeout)
+	defer cancel()
+	env := visitEnv(visit{app: "test", r: analytics.Request{Host: "test." + cfg.Domain, Path: "/"}}, 1)
+	if err := runVisitCommand(tctx, p.Command, env); err != nil {
+		return nil, fmt.Errorf("saved, but the test run failed: %w", err)
+	}
+	fmt.Fprintf(out, "-----> Runs on page views of %s\n", which)
+	return map[string]any{"command": p.Command, "apps": p.Apps}, nil
 }
 
 // hSetKey switches an app to an SSH deploy key.

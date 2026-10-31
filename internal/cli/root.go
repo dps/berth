@@ -123,7 +123,7 @@ func NewRoot() *cobra.Command {
 	add("services", sqliteCommands()...)
 	add("ops", cmdInit(), cmdDoctor(), cmdEvents(), cmdGC(), cmdBackup(), cmdRestore(),
 		cmdOffsiteSetup(), cmdOffsiteStatus(), cmdOffsiteRun(), cmdOffsiteGet(), cmdOffsiteKey(), cmdOffsiteOff(),
-		cmdNotifySet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUpgrade(), cmdUninstall())
+		cmdNotifySet(), cmdOnVisitSet(), cmdReboot(), cmdReload(), cmdCFLogin(), cmdTrustCA(), cmdUpgrade(), cmdUninstall())
 	root.AddCommand(cmdInfo())
 	return root
 }

@@ -34,9 +34,12 @@ func (d *Daemon) adminHost(cfg *state.Config) string {
 	return ac.AdminHost
 }
 
-// startAnalytics tails every app's access log into d.stats.
+// startAnalytics tails every app's access log into d.stats, and passes
+// each request to the on-visit hook. It polls every second so the hook runs
+// soon after a page view.
 func (d *Daemon) startAnalytics(ctx context.Context) {
 	d.stats = analytics.NewStats()
+	d.visits = newVisitHook(d.Store.Config)
 	t := analytics.NewTailer(d.stats, func() map[string][]string {
 		apps, _ := d.Store.Apps()
 		files := map[string][]string{}
@@ -45,7 +48,8 @@ func (d *Daemon) startAnalytics(ctx context.Context) {
 		}
 		return files
 	})
-	go t.Run(5*time.Second, ctx.Done())
+	t.OnRequest = d.visits.saw
+	go t.Run(time.Second, ctx.Done())
 }
 
 func (d *Daemon) startAdmin(cfg *state.Config) (*http.Server, error) {

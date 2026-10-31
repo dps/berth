@@ -14,8 +14,10 @@ import (
 type Tailer struct {
 	Stats *Stats
 	// Files lists each app's access logs, oldest first.
-	Files   func() map[string][]string
-	offsets map[uint64]int64
+	Files func() map[string][]string
+	// OnRequest, if set, sees each request after it's added to Stats.
+	OnRequest func(app string, r Request)
+	offsets   map[uint64]int64
 }
 
 func NewTailer(stats *Stats, files func() map[string][]string) *Tailer {
@@ -68,6 +70,9 @@ func (t *Tailer) read(app, path string, off int64) int64 {
 		off += int64(len(line))
 		if r, ok := Parse(line); ok {
 			t.Stats.Add(app, r)
+			if t.OnRequest != nil {
+				t.OnRequest(app, r)
+			}
 		}
 	}
 }
