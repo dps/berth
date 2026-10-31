@@ -291,7 +291,7 @@ func (d *Daemon) apiApp(w http.ResponseWriter, r *http.Request) {
 		info.SQLite = &SQLiteInfo{App: a.Name, Volume: a.SQLite.Volume, EnvVar: a.SQLite.EnvVar, DevOf: a.DevOf, LastBackup: d.latestSQLiteBackup(a.Name)}
 	}
 	for k := range env {
-		if !strings.HasPrefix(k, "BERTH_") {
+		if !state.IsSetting(k) {
 			info.EnvKeys = append(info.EnvKeys, k)
 		}
 	}

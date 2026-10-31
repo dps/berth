@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dps/berth/internal/caddy"
+	"github.com/dps/berth/internal/deploy"
 	"github.com/dps/berth/internal/state"
 	"github.com/dps/berth/internal/tools"
 )
@@ -43,6 +44,11 @@ func TestToolsEnableDisable(t *testing.T) {
 	}
 	if !strings.Contains(mustRead(t, d.Store.Path("caddy.json")), `"strip_path_prefix": "/tools"`) {
 		t.Fatal("Caddy doesn't route /tools")
+	}
+
+	// The app itself has to see them, past the filter on BERTH_ settings.
+	if seen := deploy.ContainerEnv(env); seen[envToolsKey] != token || seen[envToolsURL] != env[envToolsURL] {
+		t.Fatalf("the container doesn't get the tools variables: %v", seen)
 	}
 
 	// Re-enabling keeps the token and replaces the limits.

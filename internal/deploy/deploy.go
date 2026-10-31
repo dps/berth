@@ -422,12 +422,12 @@ func buildArgs(env state.Env) []string {
 	return args
 }
 
-// ContainerEnv is what the app sees: everything except BERTH_* settings,
+// ContainerEnv is what the app sees: everything except Berth's settings,
 // with PORT defaulted to 8080.
 func ContainerEnv(env state.Env) map[string]string {
 	m := map[string]string{}
 	for k, v := range env {
-		if strings.HasPrefix(k, "BERTH_") {
+		if state.IsSetting(k) {
 			continue
 		}
 		m[k] = v

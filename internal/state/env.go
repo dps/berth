@@ -178,6 +178,13 @@ const (
 	KeyPort           = "PORT"
 )
 
+// IsSetting reports whether key configures Berth rather than the app. Apps
+// don't see these. BERTH_TOOLS_* are the exception: they're how an app
+// reaches the tools gateway.
+func IsSetting(key string) bool {
+	return strings.HasPrefix(key, "BERTH_") && !strings.HasPrefix(key, "BERTH_TOOLS_")
+}
+
 // IntSetting reads an integer BERTH_* setting with a default.
 func (e Env) IntSetting(key string, def int) int {
 	if v, ok := e[key]; ok {
