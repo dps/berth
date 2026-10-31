@@ -130,6 +130,12 @@ func (d *Daemon) adminHandler() http.Handler {
 	mux.HandleFunc("GET /api/apps/{app}/logs", d.apiLogs)
 	mux.HandleFunc("GET /api/events", d.apiEvents)
 	mux.HandleFunc("GET /api/load", d.apiLoad)
+	mux.HandleFunc("GET /api/tools", d.apiTools)
+	mux.HandleFunc("POST /api/tools/key", d.adminWrite(d.apiToolsKey))
+	mux.HandleFunc("POST /api/tools/use", d.adminWrite(d.apiToolsUse))
+	mux.HandleFunc("POST /api/tools/enable", d.adminWrite(d.apiToolsEnable))
+	mux.HandleFunc("POST /api/tools/disable", d.adminWrite(d.apiToolsDisable))
+	mux.HandleFunc("POST /api/tools/test", d.adminWrite(d.apiToolsTest))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")

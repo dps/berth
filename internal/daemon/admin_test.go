@@ -136,3 +136,115 @@ func TestAdminPage(t *testing.T) {
 		t.Fatal("admin route left in caddy.json")
 	}
 }
+
+func TestAdminTools(t *testing.T) {
+	d, repo := newAIDaemon(t)
+	ctx := context.Background()
+	b, _ := json.Marshal(CreateParams{Name: "web", Repo: repo})
+	if _, err := d.hCreate(ctx, b, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	d.Store.SaveAuthConfig(&state.AuthConfig{Provider: "google", ClientID: "id", Host: "auth.example.com"})
+	b, _ = json.Marshal(AdminParams{Owner: "me@example.com"})
+	if _, err := d.hAdminEnable(ctx, b, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	d.authKey = key
+	h := d.adminHandler()
+	tokenFor := func(email string) string {
+		return auth.IdentityToken(key, "auth.example.com", "admin.example.com", auth.Identity{Provider: "google", Subject: email, Email: email}, time.Now())
+	}
+	owner := tokenFor("me@example.com")
+	post := func(path, body, token, origin, ctype string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", path, strings.NewReader(body))
+		req.Host = "admin.example.com"
+		if token != "" {
+			req.Header.Set("X-Berth-Identity", token)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		req.Header.Set("Content-Type", ctype)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	const page, js = "https://admin.example.com", "application/json"
+	const saveKey = `{"provider":"exa","key":"  exa-secret-value  "}`
+
+	// Everything but the page itself, as an owner, is refused.
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"no identity":       post("/api/tools/key", saveKey, "", page, js),
+		"not an owner":      post("/api/tools/key", saveKey, tokenFor("them@example.com"), page, js),
+		"no origin":         post("/api/tools/key", saveKey, owner, "", js),
+		"another app":       post("/api/tools/key", saveKey, owner, "https://web.example.com", js),
+		"another site":      post("/api/tools/key", saveKey, owner, "https://evil.test", js),
+		"a plain form post": post("/api/tools/key", saveKey, owner, page, "text/plain"),
+	} {
+		if w.Code != 403 {
+			t.Errorf("%s: %d %s", name, w.Code, w.Body)
+		}
+	}
+	if len(d.Store.ToolKeys()) != 0 {
+		t.Fatal("a refused request saved a key")
+	}
+
+	w := post("/api/tools/key", saveKey, owner, page, js)
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if d.Store.ToolKeys()["exa"] != "exa-secret-value" {
+		t.Fatalf("key %q", d.Store.ToolKeys()["exa"])
+	}
+	var st ToolsStatus
+	json.Unmarshal(w.Body.Bytes(), &st)
+	found := false
+	for _, p := range st.Providers {
+		found = found || p.Name == "exa" && p.HasKey
+	}
+	if !found || strings.Join(st.Others, ",") != "web" {
+		t.Fatalf("%s", w.Body)
+	}
+
+	// The key can't be read back from anywhere the page or the log reach.
+	req := httptest.NewRequest("GET", "/api/tools", nil)
+	req.Header.Set("X-Berth-Identity", owner)
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, req)
+	events, _ := os.ReadFile(d.Store.EventsPath())
+	if r.Code != 200 || strings.Contains(r.Body.String()+w.Body.String()+string(events), "exa-secret-value") {
+		t.Fatalf("the key leaked: %d", r.Code)
+	}
+	if !strings.Contains(string(events), "me@example.com saved the exa key") {
+		t.Fatalf("no audit event: %s", events)
+	}
+
+	if w = post("/api/tools/key", `{"provider":"nope","key":"k"}`, owner, page, js); w.Code != 400 || !strings.Contains(w.Body.String(), "unknown provider") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if w = post("/api/tools/use", `{"tool":"web.search","providers":["serpapi","exa"]}`, owner, page, js); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if w = post("/api/tools/enable", `{"app":"web","tools":["web.*"],"rpm":5}`, owner, page, js); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	a, _ := d.Store.App("web")
+	env, _ := d.Store.Env("web")
+	if a.Tools == nil || a.Tools.RPM != 5 || env[envToolsKey] == "" {
+		t.Fatalf("%+v", a.Tools)
+	}
+	if strings.Contains(w.Body.String(), env[envToolsKey]) {
+		t.Fatal("the app's token reached the page")
+	}
+	if w = post("/api/tools/disable", `{"app":"web"}`, owner, page, js); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if a, _ = d.Store.App("web"); a.Tools != nil {
+		t.Fatal("still enabled")
+	}
+	d.toolsDeploys.Wait()
+	if w = post("/api/tools/key", `{"provider":"exa","remove":true}`, owner, page, js); w.Code != 200 || d.Store.ToolKeys()["exa"] != "" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}

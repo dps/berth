@@ -117,6 +117,17 @@ that user; one made without `--as` makes them anonymous.
 `ANTHROPIC_API_KEY`, which the official OpenAI and Anthropic SDKs read on their
 own. Ask for the model `default`, or see `berth ai:models`.
 {{- end}}
+{{- if .Tools}}
+
+### Tools
+
+`berth tools:enable {{.App}}` gives the app web search, weather, product search,
+image generation, text to speech, transcription, translation and more, without
+holding any API keys: it sets
+`BERTH_TOOLS_URL` and `BERTH_TOOLS_KEY`. Every tool is a JSON POST from server
+code, in any language; `berth tools:docs {{.App}}` lists them with their
+arguments and `berth tools:call <tool> '{...}'` tries one.
+{{- end}}
 
 ### Ask the user first
 

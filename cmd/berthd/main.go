@@ -14,11 +14,22 @@ import (
 	"github.com/dps/berth/internal/daemon"
 	"github.com/dps/berth/internal/runtime"
 	"github.com/dps/berth/internal/state"
+	"github.com/dps/berth/internal/tools"
 )
 
 var version = "dev"
 
 func main() {
+	// berthd runs itself as the tools gateway (internal/tools).
+	if len(os.Args) == 2 && os.Args[1] == "tools" {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := tools.Serve(ctx, state.Open()); err != nil {
+			slog.Error("tools gateway", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	debug := flag.Bool("debug", os.Getenv("BERTH_DEBUG") != "", "log every external command with its duration")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()

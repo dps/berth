@@ -57,6 +57,7 @@ type agentsData struct {
 	Dev    string // the dev version's URL
 	SignIn bool
 	AI     bool
+	Tools  bool
 	Stack  stack
 }
 
@@ -71,7 +72,7 @@ func newAgentsData(app string, info *BerthInfo) agentsData {
 		d.Prod, d.Dev = fmt.Sprintf("https://%s.%s.local", app, info.Hostname), fmt.Sprintf("https://%s-dev.%s.local", app, info.Hostname)
 	}
 	if info != nil {
-		d.SignIn, d.AI = info.SignIn, info.AI
+		d.SignIn, d.AI, d.Tools = info.SignIn, info.AI, info.Tools
 	}
 	return d
 }

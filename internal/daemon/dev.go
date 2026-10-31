@@ -97,6 +97,7 @@ func (d *Daemon) ensureChild(ctx context.Context, parent *state.App, pr int, out
 	}
 	env[state.KeyKeepReleases] = "3"
 	devAI(cfg, parent, dev, env) // its own token, local models only
+	devTools(cfg, parent, dev, env)
 	if err := d.Store.SaveApp(dev); err != nil {
 		return nil, err
 	}

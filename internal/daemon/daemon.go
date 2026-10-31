@@ -67,8 +67,10 @@ type Daemon struct {
 	tunnelRetry   atomic.Bool // a tunnel config update failed; the supervisor retries it
 	cfMu          sync.Mutex
 	lastTunnelCfg string
-	auth          *auth.Server // sign-in; nil until Run
-	ai            *ai.Gateway  // AI gateway; nil until Run
+	auth          *auth.Server   // sign-in; nil until Run
+	ai            *ai.Gateway    // AI gateway; nil until Run
+	tools         *toolsChild    // tools gateway process; nil until Run
+	toolsDeploys  sync.WaitGroup // redeploys started by the admin page
 	authKey       ed25519.PrivateKey
 	stats         *analytics.Stats // request analytics from access logs; nil until Run
 	visits        *visitHook       // runs the on-visit command; nil until Run
@@ -263,7 +265,12 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		routes = append(routes, caddy.Route{App: "_admin", PublicHosts: []string{host}, Upstream: cfg.AdminAddr, SignIn: true, Private: true, NoIndex: true})
 		sites[host] = auth.Site{App: "_admin", BaseURL: "https://" + host, Access: &state.Access{Level: state.LevelAllow, Allow: []string{"@" + devOwnersGroup}}}
 	}
-	aiListen, aiSources := d.configureAI(cfg, apps)
+	toolsOn := d.configureTools(apps)
+	aiListen, aiSources := d.configureAI(cfg, apps, toolsOn)
+	toolsAddr := ""
+	if toolsOn {
+		toolsAddr = cfg.ToolsAddr
+	}
 	conf := caddy.Build(caddy.Options{
 		Admin:       cfg.CaddyAdmin,
 		HTTPListen:  cfg.CaddyHTTP,
@@ -277,6 +284,7 @@ func (d *Daemon) Apply(ctx context.Context) error {
 		AIListen:    aiListen,
 		AIAddr:      cfg.AIAddr,
 		AISources:   aiSources,
+		ToolsAddr:   toolsAddr,
 		StorageDir:  d.Store.Path("caddy"),
 		Routes:      routes,
 	})
@@ -394,6 +402,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer aiSrv.Close()
+	d.startTools(d.ctx)
 	d.startAnalytics(d.ctx)
 	d.startLoad(d.ctx)
 	defer d.saveLoad()
@@ -532,7 +541,7 @@ func (d *Daemon) relinkGateway(ctx context.Context, oldGW, newGW string) {
 		}
 		changed := false
 		for k, v := range env {
-			// Service URLs (user:pass@gw:port) and the AI gateway's (http://gw:port).
+			// Service URLs (user:pass@gw:port) and the AI and tools gateways' (http://gw:port).
 			for _, sep := range []string{"@", "//"} {
 				if strings.Contains(v, sep+oldGW+":") {
 					v = strings.ReplaceAll(v, sep+oldGW+":", sep+newGW+":")

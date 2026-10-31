@@ -118,6 +118,8 @@ func NewRoot() *cobra.Command {
 	add("signin", cmdAdmin(), cmdAdminEnable(), cmdAdminDisable())
 	root.AddGroup(&cobra.Group{ID: "ai", Title: "AI gateway:"})
 	add("ai", cmdAISetup(), cmdAIStatus(), cmdAIModels(), cmdAIKey(), cmdAIAlias(), cmdAIPull(), cmdAIEnable(), cmdAIDisable(), cmdAIUsage())
+	root.AddGroup(&cobra.Group{ID: "tools", Title: "Tools gateway:"})
+	add("tools", cmdTools(), cmdToolsKey(), cmdToolsUse(), cmdToolsEnable(), cmdToolsDisable(), cmdToolsCall(), cmdToolsDocs(), cmdToolsUsage())
 	add("services", serviceCommands("pg")...)
 	add("services", serviceCommands("redis")...)
 	add("services", sqliteCommands()...)

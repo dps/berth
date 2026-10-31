@@ -1057,6 +1057,122 @@ containers on this Mac can reach it. To change the port, set `ai_port` in
 `~/.berth/config.json` and run `berth reload`. To use Ollama on another
 machine, set `ollama_url` in `~/.berth/ai/config.json`.
 
+## Tools for your apps
+
+Give Berth your API keys once, and every app can use web search, weather,
+product search, image generation, text to speech, transcription, translation
+and more, in any language, without holding a key. Weather and web fetch work
+with no key at all.
+
+```bash
+berth tools:enable myapp                    # sets BERTH_TOOLS_URL and BERTH_TOOLS_KEY
+berth tools:key exa                         # prompts for the key
+```
+
+Every tool is a JSON POST from your server code:
+
+```bash
+curl "$BERTH_TOOLS_URL/v1/web/search" -H "Authorization: Bearer $BERTH_TOOLS_KEY" \
+  -d '{"query":"asics running shoes","limit":5}'
+```
+
+```json
+{"result":{"results":[…]},"meta":{"tool":"web.search","provider":"exa","cached":false,"ms":412}}
+```
+
+Failures are `{"error":{"code","message"}}` with a matching status, and the
+message says what to run: 503 means a tool has no provider yet, and 429 is a
+limit. The gateway only answers Berth containers, so call it from your server,
+not from a browser.
+
+| Tool | What it does | Providers |
+|---|---|---|
+| `web.search` | search the web | `exa`, `serpapi` |
+| `web.fetch` | read a public page as text | none needed |
+| `weather.current`, `weather.forecast` | conditions and daily forecast | `weatherapi`, or `openmeteo` with no key |
+| `shopping.search`, `shopping.item` | products for sale | `ebay` (key is `AppID:CertID`) |
+| `image.generate` | make an image | `gemini`, `openai` |
+| `image.edit` | change an image | `gemini` |
+| `image.describe` | describe an image, or answer a question about it | `gemini`, `ai` |
+| `audio.speak` | text to speech | `openai`, `elevenlabs` |
+| `audio.transcribe` | speech to text | `openai` |
+| `text.translate` | translate text | `deepl`, `ai` |
+| `pdf.parse` | read a PDF as Markdown | `gemini` |
+| `video.generate` | make a short video; a job, and costly | `openai`, `gemini` |
+
+Apps name the tool, not the vendor, so you can change provider without touching
+them. `berth tools:use web.search serpapi,exa` takes effect on the next call,
+and the second provider takes over if the first fails. Open-Meteo is free for
+non-commercial use; add a `weatherapi` key for anything else.
+
+`berth tools:docs myapp` prints the tools with their arguments as Markdown for
+a coding agent, `GET $BERTH_TOOLS_URL/v1/openapi.json` generates a client in
+any language, and `berth tools:call weather.current '{"location":"Paris"}'`
+tries one from your terminal.
+
+If you've given the [AI gateway](#ai-for-your-apps) an OpenAI or Gemini key,
+tools use it too, and `berth tools:key` is only for using a different one. `ai`
+in the table is the AI gateway itself: your `default` model, or an alias called
+`tools` if you make one, so translation can run on a local model with no key.
+
+### Images, audio and other files
+
+Arguments that take a file accept a public URL, a `data:` URI or a file id.
+Upload a file to get an id, and tools that make a file return one:
+
+```bash
+curl "$BERTH_TOOLS_URL/v1/files" -H "Authorization: Bearer $BERTH_TOOLS_KEY" \
+  -H 'Content-Type: image/jpeg' --data-binary @photo.jpg
+
+curl "$BERTH_TOOLS_URL/v1/image/generate" -H "Authorization: Bearer $BERTH_TOOLS_KEY" \
+  -d '{"prompt":"a Mac mini in a sunny closet","aspect_ratio":"16:9"}'
+```
+
+```json
+{"result":{"file":{"id":"file_…","url":"http://…/v1/files/file_…","content_type":"image/png","bytes":1048576,"expires":"…"}},"meta":{…}}
+```
+
+Fetch `url` with the same Authorization header and save the bytes somewhere
+your app serves from. Files last 24 hours, only the app that made one can read
+it, and browsers can't reach the gateway, so a file's `url` won't work in an
+`<img>` tag.
+
+`video.generate` takes minutes, so it answers 202 with a job. Poll
+`GET $BERTH_TOOLS_URL/v1/jobs/<id>` every 10 seconds or so until `status` is
+`done`, with `result`, or `failed`, with `error`. A job survives Berth
+restarting.
+
+Video can run up a real bill in a few calls, so `tools:enable` leaves it out
+unless you name it: `--tools 'video.*'`, or `--tools '*'` for everything.
+
+### From the admin page
+
+The **Tools** tab on the [admin page](#the-admin-page) does all of this in a
+browser: paste as many keys as you like, test each one with a real call, set
+daily limits, choose which provider goes first, and turn tools on for each app
+with its own limits. Keys are write-only there: the page shows that a key is
+saved, never the key. Only `@owners` can change anything, each change is in
+`berth events` with who made it, and turning tools on for an app redeploys it.
+A key pasted there travels through Cloudflare's tunnel like the rest of the
+page; `berth tools:key` on the Mac doesn't.
+
+### Limits and usage
+
+```bash
+berth tools:enable myapp --tools 'web.*,weather.forecast' --monthly-calls 10000 --rpm 60
+berth tools:key ebay --daily 5000           # shared across every app using the key
+berth tools                                 # tools, providers and who uses them
+berth tools:usage [app]
+```
+
+Answers are cached and shared between apps, for between five minutes and an
+hour depending on the tool, so a free tier goes further; cache hits don't count
+towards `--monthly-calls`. Arguments and results are never logged.
+
+A dev version gets its own token, limited to keyless providers and the cache,
+so an agent looping on `dev:push` can't spend your quota.
+`berth tools:enable myapp-dev --full` lifts that.
+
 ## The admin page
 
 ```bash
@@ -1084,10 +1200,9 @@ visitors leaves the Mac. A "visitor" is a distinct IP address and browser;
 crawlers, scripts and uptime checkers are counted separately. Countries need
 the Cloudflare tunnel. It keeps 7 days.
 
-It's read-only on purpose: deploys, rollbacks and config changes stay in the
-terminal, and config values never appear, only their names. Serve it
-somewhere else with `--host dash.example.com`, or turn it off with
-`berth admin:disable`.
+Apart from the Tools tab, it's read-only on purpose: deploys, rollbacks and
+config changes stay in the CLI, where they're logged in your shell and need the
+Mac. Environment variables are shown by name only.
 
 ## Living in a closet
 
@@ -1366,6 +1481,9 @@ agents want. `berth <command> --help` has more on each.
 | `berth ai:alias [name] [provider/model] [--remove]` | name models for apps; changes apply at once |
 | `berth ai:enable <app> [--models …] [--monthly-tokens n] [--rpm n]` · `ai:disable <app>` | give or revoke an app's access |
 | `berth ai:status` · `ai:models` · `ai:pull <model>` · `ai:usage [app] [--month m]` | what's available, downloads, usage |
+| `berth tools` · `tools:docs [app]` · `tools:call <tool> [json]` · `tools:usage [app] [--month m]` | the tools gateway: what's available, how to call it, trying it, usage |
+| `berth tools:key <provider> [key] [--daily n] [--remove]` · `tools:use <tool> [providers]` | provider keys held by Berth, and which provider serves a tool |
+| `berth tools:enable <app> [--tools …] [--monthly-calls n] [--rpm n] [--full]` · `tools:disable <app>` | give or revoke an app's access |
 | **Running the Mac** | |
 | `berth admin` · `admin:enable [--host h] [--owner email]` · `admin:disable` | the admin page for `@owners` |
 | `berth backup [file]` · `berth restore <file>` | archive and restore everything |

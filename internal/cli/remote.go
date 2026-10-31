@@ -226,6 +226,7 @@ type BerthInfo struct {
 	Hostname string `json:"hostname"`
 	SignIn   bool   `json:"signin"`
 	AI       bool   `json:"ai"`
+	Tools    bool   `json:"tools"`
 }
 
 func localInfo() (*BerthInfo, error) {
@@ -233,7 +234,7 @@ func localInfo() (*BerthInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	info := &BerthInfo{Version: Version, Domain: cfg.Domain, Hostname: cfg.Hostname, AI: store().AIConfigured()}
+	info := &BerthInfo{Version: Version, Domain: cfg.Domain, Hostname: cfg.Hostname, AI: store().AIConfigured(), Tools: store().ToolsConfigured()}
 	if ac, err := store().AuthConfig(); err == nil && ac.Provider != "" {
 		info.SignIn = true
 	}

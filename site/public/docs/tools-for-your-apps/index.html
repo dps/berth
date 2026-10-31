@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools for your apps · Berth docs</title>
+<meta name="description" content="Give Berth your API keys once, and every app can use web search, weather, product search, image generation, text to speech, transcription, translation and mo…">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css?v=d786870092">
+<script src="/assets/site.js?v=7a45726c56" defer></script>
+</head>
+<body class="docs">
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28"><span>Berth</span></a>
+  <nav class="top-links">
+    <a href="/docs/" aria-current="true">Docs</a>
+    <a href="https://github.com/dps/berth">GitHub</a>
+  </nav>
+  <button class="menu" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button>
+</header>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar">
+    <nav aria-label="Documentation">
+      <ul><li><a href="/docs/">Introduction</a></li></ul>
+      <h2>Getting going</h2>
+      <ul>
+        <li><a href="/docs/what-you-need/">What you need</a></li>
+        <li><a href="/docs/setting-up/">Setting up</a></li>
+        <li><a href="/docs/starting-a-new-app/">Starting a new app</a></li>
+        <li><a href="/docs/deploying-an-app/">Deploying an app</a></li>
+      </ul>
+      <h2>Day to day</h2>
+      <ul>
+        <li><a href="/docs/releases-and-rollbacks/">Releases and rollbacks</a></li>
+        <li><a href="/docs/config/">Config</a></li>
+        <li><a href="/docs/logs-and-status/">Logs and status</a></li>
+        <li><a href="/docs/one-off-commands/">One-off commands</a></li>
+      </ul>
+      <h2>Data and background work</h2>
+      <ul>
+        <li><a href="/docs/postgres-and-redis/">Postgres and Redis</a></li>
+        <li><a href="/docs/sqlite/">SQLite</a></li>
+        <li><a href="/docs/migrations/">Migrations</a></li>
+        <li><a href="/docs/workers-and-scheduled-jobs/">Workers and scheduled jobs</a></li>
+        <li><a href="/docs/persistent-storage/">Persistent storage</a></li>
+      </ul>
+      <h2>Who sees what</h2>
+      <ul>
+        <li><a href="/docs/domains-lan-urls-and-passwords/">Domains, LAN URLs and passwords</a></li>
+        <li><a href="/docs/sign-in-with-google/">Sign in with Google</a></li>
+      </ul>
+      <h2>Working with agents</h2>
+      <ul>
+        <li><a href="/docs/dev-versions/">Dev versions</a></li>
+        <li><a href="/docs/pull-request-previews/">Pull request previews</a></li>
+        <li><a href="/docs/ai-for-your-apps/">AI for your apps</a></li>
+      </ul>
+      <h2>Running the Mac</h2>
+      <ul>
+        <li><a href="/docs/the-admin-page/">The admin page</a></li>
+        <li><a href="/docs/living-in-a-closet/">Living in a closet</a></li>
+        <li><a href="/docs/working-from-your-laptop/">Working from your laptop</a></li>
+        <li><a href="/docs/backups-and-moving-to-a-new-mac/">Backups and moving to a new Mac</a></li>
+        <li><a href="/docs/upgrading/">Upgrading</a></li>
+      </ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="/docs/commands/">Commands</a></li>
+        <li><a href="/docs/troubleshooting/">Troubleshooting</a></li>
+        <li><a href="/docs/example-apps/">Example apps</a></li>
+        <li><a href="/docs/how-it-works/">How it works</a></li>
+        <li><a href="/docs/hacking-on-berth/">Hacking on Berth</a></li>
+      </ul>
+      <h2>More</h2>
+      <ul>
+        <li><a href="/docs/tools-for-your-apps/" aria-current="page">Tools for your apps</a></li>
+        <li><a href="/docs/license/">License</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="doc" id="content">
+    <article class="prose">
+      <h1 id="tools-for-your-apps">Tools for your apps</h1>
+      <p>Give Berth your API keys once, and every app can use web search, weather,
+product search, image generation, text to speech, transcription, translation
+and more, in any language, without holding a key. Weather and web fetch work
+with no key at all.</p>
+<pre><code class="language-bash">berth tools:enable myapp                    # sets BERTH_TOOLS_URL and BERTH_TOOLS_KEY
+berth tools:key exa                         # prompts for the key
+</code></pre>
+<p>Every tool is a JSON POST from your server code:</p>
+<pre><code class="language-bash">curl &quot;$BERTH_TOOLS_URL/v1/web/search&quot; -H &quot;Authorization: Bearer $BERTH_TOOLS_KEY&quot; \
+  -d '{&quot;query&quot;:&quot;asics running shoes&quot;,&quot;limit&quot;:5}'
+</code></pre>
+<pre><code class="language-json">{&quot;result&quot;:{&quot;results&quot;:[…]},&quot;meta&quot;:{&quot;tool&quot;:&quot;web.search&quot;,&quot;provider&quot;:&quot;exa&quot;,&quot;cached&quot;:false,&quot;ms&quot;:412}}
+</code></pre>
+<p>Failures are <code>{&quot;error&quot;:{&quot;code&quot;,&quot;message&quot;}}</code> with a matching status, and the
+message says what to run: 503 means a tool has no provider yet, and 429 is a
+limit. The gateway only answers Berth containers, so call it from your server,
+not from a browser.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+<th>Providers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>web.search</code></td>
+<td>search the web</td>
+<td><code>exa</code>, <code>serpapi</code></td>
+</tr>
+<tr>
+<td><code>web.fetch</code></td>
+<td>read a public page as text</td>
+<td>none needed</td>
+</tr>
+<tr>
+<td><code>weather.current</code>, <code>weather.forecast</code></td>
+<td>conditions and daily forecast</td>
+<td><code>weatherapi</code>, or <code>openmeteo</code> with no key</td>
+</tr>
+<tr>
+<td><code>shopping.search</code>, <code>shopping.item</code></td>
+<td>products for sale</td>
+<td><code>ebay</code> (key is <code>AppID:CertID</code>)</td>
+</tr>
+<tr>
+<td><code>image.generate</code></td>
+<td>make an image</td>
+<td><code>gemini</code>, <code>openai</code></td>
+</tr>
+<tr>
+<td><code>image.edit</code></td>
+<td>change an image</td>
+<td><code>gemini</code></td>
+</tr>
+<tr>
+<td><code>image.describe</code></td>
+<td>describe an image, or answer a question about it</td>
+<td><code>gemini</code>, <code>ai</code></td>
+</tr>
+<tr>
+<td><code>audio.speak</code></td>
+<td>text to speech</td>
+<td><code>openai</code>, <code>elevenlabs</code></td>
+</tr>
+<tr>
+<td><code>audio.transcribe</code></td>
+<td>speech to text</td>
+<td><code>openai</code></td>
+</tr>
+<tr>
+<td><code>text.translate</code></td>
+<td>translate text</td>
+<td><code>deepl</code>, <code>ai</code></td>
+</tr>
+<tr>
+<td><code>pdf.parse</code></td>
+<td>read a PDF as Markdown</td>
+<td><code>gemini</code></td>
+</tr>
+<tr>
+<td><code>video.generate</code></td>
+<td>make a short video; a job, and costly</td>
+<td><code>openai</code>, <code>gemini</code></td>
+</tr>
+</tbody>
+</table>
+<p>Apps name the tool, not the vendor, so you can change provider without touching
+them. <code>berth tools:use web.search serpapi,exa</code> takes effect on the next call,
+and the second provider takes over if the first fails. Open-Meteo is free for
+non-commercial use; add a <code>weatherapi</code> key for anything else.</p>
+<p><code>berth tools:docs myapp</code> prints the tools with their arguments as Markdown for
+a coding agent, <code>GET $BERTH_TOOLS_URL/v1/openapi.json</code> generates a client in
+any language, and <code>berth tools:call weather.current '{&quot;location&quot;:&quot;Paris&quot;}'</code>
+tries one from your terminal.</p>
+<p>If you've given the <a href="/docs/ai-for-your-apps/">AI gateway</a> an OpenAI or Gemini key,
+tools use it too, and <code>berth tools:key</code> is only for using a different one. <code>ai</code>
+in the table is the AI gateway itself: your <code>default</code> model, or an alias called
+<code>tools</code> if you make one, so translation can run on a local model with no key.</p>
+<h2 id="images-audio-and-other-files">Images, audio and other files</h2>
+<p>Arguments that take a file accept a public URL, a <code>data:</code> URI or a file id.
+Upload a file to get an id, and tools that make a file return one:</p>
+<pre><code class="language-bash">curl &quot;$BERTH_TOOLS_URL/v1/files&quot; -H &quot;Authorization: Bearer $BERTH_TOOLS_KEY&quot; \
+  -H 'Content-Type: image/jpeg' --data-binary @photo.jpg
+
+curl &quot;$BERTH_TOOLS_URL/v1/image/generate&quot; -H &quot;Authorization: Bearer $BERTH_TOOLS_KEY&quot; \
+  -d '{&quot;prompt&quot;:&quot;a Mac mini in a sunny closet&quot;,&quot;aspect_ratio&quot;:&quot;16:9&quot;}'
+</code></pre>
+<pre><code class="language-json">{&quot;result&quot;:{&quot;file&quot;:{&quot;id&quot;:&quot;file_…&quot;,&quot;url&quot;:&quot;http://…/v1/files/file_…&quot;,&quot;content_type&quot;:&quot;image/png&quot;,&quot;bytes&quot;:1048576,&quot;expires&quot;:&quot;…&quot;}},&quot;meta&quot;:{…}}
+</code></pre>
+<p>Fetch <code>url</code> with the same Authorization header and save the bytes somewhere
+your app serves from. Files last 24 hours, only the app that made one can read
+it, and browsers can't reach the gateway, so a file's <code>url</code> won't work in an
+<code>&lt;img&gt;</code> tag.</p>
+<p><code>video.generate</code> takes minutes, so it answers 202 with a job. Poll
+<code>GET $BERTH_TOOLS_URL/v1/jobs/&lt;id&gt;</code> every 10 seconds or so until <code>status</code> is
+<code>done</code>, with <code>result</code>, or <code>failed</code>, with <code>error</code>. A job survives Berth
+restarting.</p>
+<p>Video can run up a real bill in a few calls, so <code>tools:enable</code> leaves it out
+unless you name it: <code>--tools 'video.*'</code>, or <code>--tools '*'</code> for everything.</p>
+<h2 id="from-the-admin-page">From the admin page</h2>
+<p>The <strong>Tools</strong> tab on the <a href="/docs/the-admin-page/">admin page</a> does all of this in a
+browser: paste as many keys as you like, test each one with a real call, set
+daily limits, choose which provider goes first, and turn tools on for each app
+with its own limits. Keys are write-only there: the page shows that a key is
+saved, never the key. Only <code>@owners</code> can change anything, each change is in
+<code>berth events</code> with who made it, and turning tools on for an app redeploys it.
+A key pasted there travels through Cloudflare's tunnel like the rest of the
+page; <code>berth tools:key</code> on the Mac doesn't.</p>
+<h2 id="limits-and-usage-1">Limits and usage</h2>
+<pre><code class="language-bash">berth tools:enable myapp --tools 'web.*,weather.forecast' --monthly-calls 10000 --rpm 60
+berth tools:key ebay --daily 5000           # shared across every app using the key
+berth tools                                 # tools, providers and who uses them
+berth tools:usage [app]
+</code></pre>
+<p>Answers are cached and shared between apps, for between five minutes and an
+hour depending on the tool, so a free tier goes further; cache hits don't count
+towards <code>--monthly-calls</code>. Arguments and results are never logged.</p>
+<p>A dev version gets its own token, limited to keyless providers and the cache,
+so an agent looping on <code>dev:push</code> can't spend your quota.
+<code>berth tools:enable myapp-dev --full</code> lifts that.</p>
+
+    </article>
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/hacking-on-berth/"><span>Previous</span>Hacking on Berth</a><a class="next" href="/docs/license/"><span>Next</span>License</a>
+    </nav>
+    <p class="edit"><a href="https://github.com/dps/berth/edit/main/README.md">Edit this page on GitHub</a> (it's a section of the README)</p>
+  </main>
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#images-audio-and-other-files">Images, audio and other files</a></li>
+      <li><a href="#from-the-admin-page">From the admin page</a></li>
+      <li><a href="#limits-and-usage-1">Limits and usage</a></li>
+    </ul>
+  </nav>
+</div>
+<footer class="site-foot">
+  <p>Berth is open source under the MIT license. This site is a Berth app, served from a Mac mini in my closet.</p>
+</footer>
+</body>
+</html>

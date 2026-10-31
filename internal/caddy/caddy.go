@@ -59,9 +59,12 @@ type Options struct {
 	// network and loopback). Caddy, not berthd, listens there because
 	// macOS's firewall approves apps, not ports, and Caddy already serves
 	// the LAN.
-	AIListen   string
-	AIAddr     string
-	AISources  []string
+	AIListen  string
+	AIAddr    string
+	AISources []string
+	// ToolsAddr, when set, is the tools gateway, served under /tools on
+	// the same port.
+	ToolsAddr  string
 	IDHeaders  []string // identity headers: always stripped from clients, copied from forward_auth
 	LANHTTP    string   // :80 redirect to HTTPS on the LAN, empty disables
 	StorageDir string   // Caddy's data dir (internal CA lives here)
@@ -149,10 +152,21 @@ func Build(o Options) obj {
 		},
 	}
 	if o.AIListen != "" && o.AIAddr != "" {
+		var gatewayRoutes []any
+		if o.ToolsAddr != "" {
+			gatewayRoutes = append(gatewayRoutes, obj{
+				"match": []any{obj{"path": []string{"/tools/*"}, "remote_ip": obj{"ranges": o.AISources}}},
+				"handle": []any{
+					obj{"handler": "rewrite", "strip_path_prefix": "/tools"},
+					obj{"handler": "reverse_proxy", "upstreams": []any{obj{"dial": o.ToolsAddr}}},
+				},
+				"terminal": true,
+			})
+		}
 		servers["ai"] = obj{
 			"listen":          []string{o.AIListen},
 			"automatic_https": obj{"disable": true},
-			"routes": []any{
+			"routes": append(gatewayRoutes,
 				obj{
 					"match": []any{obj{"remote_ip": obj{"ranges": o.AISources}}},
 					"handle": []any{obj{
@@ -167,7 +181,7 @@ func Build(o Options) obj {
 					"status_code": 403,
 					"body":        "the Berth AI gateway only answers Berth apps\n",
 				}}},
-			},
+			),
 		}
 	}
 	httpApp := obj{"servers": servers}

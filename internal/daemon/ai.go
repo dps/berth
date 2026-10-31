@@ -57,13 +57,18 @@ func (d *Daemon) saveAIKeys(keys map[string]string) error {
 }
 
 // configureAI loads the gateway's setup and returns where Caddy should
-// listen for it ("" until AI is set up or an app uses it).
-func (d *Daemon) configureAI(cfg *state.Config, apps []*state.App) (listen string, sources []string) {
+// listen for it ("" until AI is set up or an app uses it, or the tools
+// gateway, which shares the port, is on).
+func (d *Daemon) configureAI(cfg *state.Config, apps []*state.App, toolsOn bool) (listen string, sources []string) {
 	var gwApps []ai.App
 	for _, a := range apps {
 		if a.AI != nil {
 			gwApps = append(gwApps, ai.App{Name: a.Name, Policy: *a.AI})
 		}
+	}
+	if d.tools != nil {
+		// Tools like translation can use the models apps use.
+		gwApps = append(gwApps, ai.App{Name: "@tools", Policy: state.AppAI{TokenHash: ai.HashToken(d.tools.ai)}})
 	}
 	if d.ai != nil {
 		ac, err := d.Store.AIConfig()
@@ -73,7 +78,7 @@ func (d *Daemon) configureAI(cfg *state.Config, apps []*state.App) (listen strin
 		}
 		d.ai.Configure(ac, d.aiKeys(), gwApps)
 	}
-	if !d.Store.AIConfigured() && len(gwApps) == 0 || cfg.AIPort == 0 {
+	if !d.Store.AIConfigured() && !toolsOn && !anyAI(apps) || cfg.AIPort == 0 {
 		return "", nil
 	}
 	sources = []string{"127.0.0.1/32", "::1/128"}
@@ -320,6 +325,15 @@ func (d *Daemon) hAIEnable(ctx context.Context, params json.RawMessage, out io.W
 	fmt.Fprintf(out, "-----> %s can use the AI gateway: %s, %s and %s set\n", p.App, envOpenAIBase, envOpenAIKey, envAnthropicBase)
 	fmt.Fprintf(out, "       models: %s; tokens a month: %s; requests a minute: %s\n", orAll(strings.Join(p.Models, ", ")), orAll(count(p.MonthlyTokens)), orAll(count(int64(p.RPM))))
 	return d.redeployForConfig(ctx, p.App, p.NoRestart, false, out)
+}
+
+func anyAI(apps []*state.App) bool {
+	for _, a := range apps {
+		if a.AI != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func orAll(s string) string {

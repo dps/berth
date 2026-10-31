@@ -415,6 +415,58 @@ then makes a config release. The gateway serves the OpenAI-compatible API (`/v1/
 
 **Not in v1:** translating between API formats (local models over the Anthropic API, or Claude over OpenAI's beyond what Anthropic's own compatibility endpoint offers), dollar budgets, per-request prompt logging, response caching, and fallbacks between providers.
 
+## Tools gateway
+
+Every app can use web search, weather, product search and the like, in any language, without holding a provider key. The owner gives Berth a key once; apps get a token and plain HTTP.
+
+```
+app container ──Bearer berth_tools_<token>──▶ Caddy :7790 /tools/* (container network only) ──▶ berthd tools 127.0.0.1:7784
+                                                                                                 ├─▶ cache, shared between apps
+                                                                                                 └─▶ Exa, SerpApi, WeatherAPI, Open-Meteo, eBay, public URLs
+```
+
+**What an app sees.** `berth tools:enable <app>` gives the app its own token, sets `BERTH_TOOLS_URL` and `BERTH_TOOLS_KEY`, and makes a config release. Each tool is `POST $BERTH_TOOLS_URL/v1/<group>/<tool>` with a JSON body, answering `{"result":…,"meta":{tool,provider,cached,ms}}` or `{"error":{code,message}}`. Plain HTTP is the main API because Berth is polyglot: a call is one `fetch` in anything, so there are no per-language SDKs to keep up. `GET /v1/tools`, `/v1/openapi.json` and `/v1/docs` describe what that token may call; an app that wants types generates them from the OpenAPI document. `berth tools:docs <app>` gives the same Markdown to a coding agent, since agents write most Berth apps.
+
+**One definition per tool.** A tool is a Go value in `internal/tools`: name, summary, input and output fields, cache lifetime, and a function per provider. Input checking, the HTTP route, OpenAPI and the docs all come from it. Arguments a tool doesn't declare are dropped, so a provider only sees what the tool defines.
+
+**Capabilities, not vendors.** Apps call `web.search`, never Exa, as with AI aliases. Provider answers are normalised to the tool's output, the owner orders providers with `berth tools:use web.search exa,serpapi` (effective on the next call; nothing redeploys), and a provider that fails moves on to the next. An error that another provider couldn't fix, like an unknown place, stops there. Providers with no key are skipped, so a keyed provider placed first takes over as soon as its key is saved.
+
+**A child process, not part of berthd.** The AI gateway is a relay, so it lives in berthd. This service will hold dozens of integrations parsing other people's data, and one of them shouldn't be able to take the deploy system down. berthd runs its own binary as `berthd tools`, starting it once the gateway is used (`tools/config.json` exists or an app has access), restarting it with a growing delay if it dies, and sending SIGHUP after a change. The child reads the same store and exits when its stdin closes, so it can't outlive berthd through a crash or a re-exec. It reaches apps through the AI gateway's Caddy server, for the same firewall reasons, on the same port: a Berth with both opens one. That server now exists when either is in use, and only containers and loopback get an answer.
+
+**Keys stay out of apps.** Provider keys live in `secrets/tools.json` (0600); apps hold a `berth_tools_` token, stored hashed in `app.json`. Some providers want the key in the URL, so errors passed to apps carry only a status, never a URL or a provider's response body.
+
+**Limits.** `tools:enable` takes `--tools` (names or patterns like `web.*`, checked against the catalog so a typo fails at once), `--monthly-calls` and `--rpm`. Because one key is shared, `berth tools:key ebay --daily 5000` caps a provider across all apps; a provider over its budget is skipped. Limits are in calls, not dollars, for the reason AI budgets are in tokens.
+
+**Cache.** Each tool declares how long answers stay fresh (`web.fetch` 5 minutes, `weather.current` 10, `web.search` an hour), and answers are shared between apps by tool and arguments. It's in memory, so it starts empty after a restart. Hits don't count towards `--monthly-calls` or a provider's budget. A tool that acts on someone's own account must never set a cache lifetime.
+
+**Dev versions** get their own token with `KeylessOnly`: providers that need no key, plus whatever is already cached, so an agent looping on `dev:push` can't spend the owner's quota. Previews are created the same way. `berth tools:enable <app>-dev --full` lifts it.
+
+**`web.fetch` and private addresses.** The gateway runs on the Mac, where a URL could reach Caddy's admin API, berthd, Postgres or the LAN, none of which a container can. `publicClient` checks the address at connect time, in the dialer's `Control` hook, so redirects and DNS rebinding are covered, and refuses loopback, private, link-local, CGNAT, NAT64 and reserved ranges. It uses no proxy, which would do the dialing for it.
+
+**Usage.** Each provider call or cache hit appends to `tools/usage-YYYY-MM.jsonl`: time, app, tool, provider, whether cached, latency and status. Arguments and results are never logged. Totals are rebuilt at startup, so limits survive restarts. `berth tools:call` runs through the same gateway as `@owner`, with a token berthd makes when it starts, and is subject to provider budgets.
+
+**Admin page.** The Tools tab is the only part of the admin page that changes anything, because pasting keys into a browser form is how most owners will want to set up a dozen providers. `POST /api/tools/*` needs more than a page view does: an `Origin` exactly matching the admin host, since every app shares its parent domain and an app's page could otherwise post from a signed-in owner's browser; a JSON content type, so a plain cross-site form can't send it; and membership of `@owners` re-checked on every write, by email, so an owner removed from the group loses write access at once. An owner group listed only as `@domain` can see the tab but not save, because the identity token doesn't carry the provider-vouched domain. Keys are write-only: the API returns `has_key`, never a key or part of one, and the app's token never reaches the page. Each change is an event naming who made it. Test runs the provider's sample call through the gateway with `X-Berth-Provider`, honoured only for the owner, which skips the cache so it really tests that key. Turning tools on or off answers once saved and redeploys in the background, because a deploy can outlast Cloudflare's request limit; changing limits needs no redeploy. A key pasted on the page passes through Cloudflare's tunnel, so `berth tools:key` on the Mac stays the option for anyone who'd rather it didn't.
+
+**Media tools.** `image.*`, `audio.*`, `text.translate`, `pdf.parse` and `video.generate` follow the same rules, with a few additions.
+
+*Files.* Results too big for JSON go in `tools/files/` for 24 hours (4 GB at most, oldest first) and tools return `{"file":{id,url,content_type,bytes,expires}}`. A file belongs to the app that made it: another app's token gets a 404, from `GET /v1/files/<id>` and when passing the id to a tool. `POST /v1/files` uploads up to 64 MB. File arguments take a URL, a `data:` URI or a file id; a URL goes through the same public-only client as `web.fetch`, so these tools can't read the Mac's network either. Tools that make files aren't cached.
+
+*Jobs.* `video.generate` answers 202 with a job. Nothing in the gateway waits on it: the job file in `tools/jobs/` holds the provider's operation name, and `GET /v1/jobs/<id>` asks the provider, at most every 5 seconds, downloading the result when it's done. So a job survives a restart and costs nothing while nobody asks. It gives up after an hour. The operation name stays on the Mac.
+
+*Costly tools.* A tool marked `Costly` isn't included by an empty allow list, so `tools:enable` without `--tools` doesn't grant it; `video.*` or `*` does, and the admin page has a box for it. The owner's `tools:call` and Test aren't limited.
+
+*Shared keys.* `openai` and `gemini` keys already saved with `ai:key` serve tools too (`tools.Keys`); a key from `tools:key` takes precedence, and removing it doesn't touch the AI gateway's. The `ai` provider is the AI gateway itself, reached directly on `ai_addr` as an app named `@tools` with a token berthd makes when it starts, so its calls show in `ai:usage`. It asks for an alias called `tools`, or `default`. It counts as spending, so dev versions don't get it.
+
+*Models.* The vendor model names are constants at the top of `media.go`, using vendors' own moving aliases (`gemini-flash-latest`, `chatgpt-image-latest`) where they exist, because Google and OpenAI both retired models this code first named within days of it being written: `gemini-2.5-flash` is closed to new users and `gpt-image-1` is gone. A provider's error detail goes to the log with the key removed; apps get only the status.
+
+**Trying it from a laptop.** The gateway only answers containers, so `npm run dev` on a laptop can't reach it. `berth tools:call` and `dev:push` cover that for now.
+
+**Results** (Mac mini M4, macOS 26.1): the real child process on loopback, no key set. `weather.current` for "San Francisco, CA" took 1.4 s through Open-Meteo, then a cache hit in under 1 ms; `web.fetch` of example.com took 65 ms; URLs for Caddy's admin port and 169.254.169.254 got `private_address`; `web.search` got a 503 naming `berth tools:key exa`; closing stdin stopped it. Not yet exercised: a call from inside a container through Caddy, and real responses from the keyed providers (Exa, SerpApi, WeatherAPI, eBay, OpenAI, Gemini, ElevenLabs, DeepL), which are tested against fakes built from their documented formats.
+
+**Roadmap.** Built so far: the gateway and web, weather and shopping tools, the admin tab, and media. Next: shared data (news, maps, markets, sports with a `league` argument rather than a server per league, flights, transit); transcription and speech on the Mac's GPU, which need no key; MCP and OpenAI/Anthropic tool formats generated from the catalog; and last, tools on the owner's own accounts (mail, calendar, Slack), which need OAuth, separate read and write grants and no shared cache, because a public app with access to an inbox is a way into that inbox. Costly tools have an explicit grant and the app's monthly cap, but no cap of their own yet.
+
+**Not in v1:** tools acting for each visitor's own account, a generic key-injecting proxy for whole vendor APIs, dollar budgets, a cache that survives restarts, a `berth status` line, and owner-defined tools.
+
 ## Admin page
 
 `https://admin.<domain>` shows the whole Berth on one page, for the people in the `@owners` sign-in group: everything `berth status` prints, live, plus analytics for every app from the request logs Berth already keeps. `berth admin:enable [--host h] [--owner email]` turns it on (it needs sign-in, since it is only for owners), `berth admin` opens it, `admin:disable` turns it off.
@@ -424,9 +476,10 @@ then makes a config release. The gateway serves the OpenAI-compatible API (`/v1/
 - *Overview*: health tiles (container system, Caddy, tunnel, free disk, committed memory against physical, the AI gateway or berthd's uptime), any warnings `berth status` would print, the last 24 hours across all apps (requests, visitors, server errors, p50 and p95 latency, data served, each against the 24 hours before), requests per hour stacked by app beside p50 and p95 latency per hour, a table of apps (state, release and commit, requests with a sparkline, 5xx, p50, p95, visitors, memory used against its limit, uptime; dev versions nested under their apps), services with their links and last backup, and recent events. Latency across apps comes from their merged histograms (`Stats.QueryAll`), since percentiles can't be added up app by app; its lines are grey because the requests chart beside it uses the categorical hues for apps.
 - *System load*, under the health tiles: the 1-minute load average against the core count, CPU busy, memory in use, swap used and the range's peak load; the 1- and 15-minute load averages; CPU and memory in use on one 0–100% axis; and CPU stacked by app, as a share of one core (Activity Monitor's convention), apps in their usual colors and services in grey. The apps and services tables get a CPU column from the latest sample. A range toggle switches between the last hour (1-minute steps) and the last day (10-minute steps); gaps are when berthd wasn't running.
 - *App*: URLs, repo and commit (linked to GitHub), release and uptime; for the last hour, 24 hours or 7 days: requests, visitors (with mobile share), server-error rate, p50/p95/p99 latency, data served and the share from bots and scripts, each with its change; requests over time by status class and latency over time; top pages (IDs folded, so `/api/chirps/12/like` and `/13/like` are one row), referrers, countries and browsers. Tabs: live requests (new ones stream in every 3 s), releases (status, failed stage and error, build and release-command times), the app's log output (following), its setup (sign-in policy, domains, services, mounts, AI limits and usage, config variable *names*), and its events.
+- *Tools*: provider keys, each with a real test call and a daily limit; the provider order for each tool; and each app's access and limits. See Tools gateway.
 - *Events*, filterable by app, kind and text; *AI*: Ollama, models in memory, aliases, providers and each app's tokens against its budget.
 
-It is read-only on purpose: actions stay in the CLI, where they are logged in the shell and need the Mac. Env values, release env snapshots and AI token hashes never reach the page.
+Apart from the Tools tab it is read-only on purpose: actions stay in the CLI, where they are logged in the shell and need the Mac. Env values, release env snapshots and AI token hashes never reach the page.
 
 **Analytics come from Caddy's access logs, not from the apps.** No script on app pages, no cookie, no extra hop: berthd tails each app's JSON access log (`internal/analytics`), every 5 s, tracking files by inode so rotation doesn't double-count, and keeps 7 days in memory: per-minute counts by status class with bytes and a latency histogram (5 ms … 30 s buckets, percentiles interpolated within a bucket), and per-10-minute top lists and visitor sets. A visitor is a hash of IP and User-Agent, so the count is of distinct browsers, not people; requests whose User-Agent is empty, doesn't start with `Mozilla/` or names a crawler or HTTP library count as bots and scripts and are kept out of visitors. Countries come from Cloudflare's `CF-IPCountry` header (LAN requests have none). Referrers are other sites' hostnames. On start, berthd reads the last 7 days of logs back; a 4 MB log (4,400 requests) loads in 52 ms and a 7-day query takes 44 µs. Nothing about visitors leaves the Mac, and credentials in headers are already redacted in Caddy's logs.
 
@@ -546,9 +599,13 @@ All state is plain files under `~/.berth`, readable with `cat`, backed up with `
     cloudflared/<tunnel>.json     # tunnel credentials
     cloudflared/zones/<zone>.pem  # browser-login cert per connected zone
     ai.json              # AI provider keys
+    tools.json           # tool provider keys
   ai/
     config.json          # aliases, extra providers, ollama_url, local_parallel
     usage-YYYY-MM.jsonl  # one line per AI request: app, model, tokens, latency (no prompts)
+  tools/
+    config.json          # provider order per tool, daily budgets per provider
+    usage-YYYY-MM.jsonl  # one line per tool call: app, tool, provider, cached, latency (no arguments)
   apps/<app>/
     app.json             # repo, branch, path, private, mounts, sqlite, links, domains, auth, hook secret, poll state
     env                  # KEY=value, mode 0600; the live config
@@ -628,6 +685,7 @@ The attack surface is two HTTP endpoints behind Cloudflare, nothing else. The th
 - **Off-Mac backups** are encrypted on the Mac with a key the provider never sees; the bucket credentials need only object read, write, list and delete on that bucket.
 - **Admin page**: only `@owners`, checked twice (Caddy's sign-in check, then berthd verifying the signed identity for the admin hostname); read-only; strict CSP; never shows env values.
 - **AI gateway**: provider keys never leave berthd; apps get per-app tokens (stored hashed) that only the gateway accepts, limited by model, tokens a month and requests a minute. The gateway port answers only the container network and loopback. Prompts aren't logged.
+- **Tools gateway**: provider keys never leave Berth; apps get per-app tokens (stored hashed) limited by tool, calls a month and calls a minute. It runs apart from berthd, answers only the container network and loopback, never logs arguments or results, and `web.fetch` can't reach private addresses. Its admin tab takes keys it can never show back, and accepts changes only from an owner on the admin page itself.
 - **Public by default is a choice**: `berth create --private` creates the app with no public hostname: its Caddy route matches only LAN hosts, so tunnel requests for it get a 404; `berth auth:set` adds basic auth in Caddy; both are one flag because the hobbyist default should be safe to flip either way.
 
 ## CLI reference
@@ -676,6 +734,7 @@ Dokku's `noun:verb` style, with the handful of commands people type daily at the
 | `berth notify:set <url\|off>` | deploy/crash notifications | — |
 | `berth on-visit:set <command\|off> [--app a]` | a command run on page views | — |
 | `berth offsite:setup [--r2 id\|--endpoint u] --bucket b [--key k]` / `offsite:status` / `offsite:run` / `offsite:get [backup]` / `offsite:key` / `offsite:off` | encrypted nightly backups to S3-compatible storage | — |
+| `berth tools` / `tools:key <provider> [key] [--daily n]` / `tools:use <tool> [providers]` / `tools:enable <app> [--tools …] [--monthly-calls n] [--rpm n] [--full]` / `tools:disable <app>` / `tools:docs [app]` / `tools:call <tool> [json]` / `tools:usage [app]` | the tools gateway: Berth-held provider keys, plain HTTP tools for every app | — |
 | `berth upgrade [--check] [-y]` | upgrade Berth as it was installed; from a laptop, the Mac too | `dokku-update` |
 
 On a machine without Berth, every command except `new`, `dev:push`, `git:remote`, `admin`, `upgrade` and setup runs on the Mac over SSH (`$BERTH_HOST`, or the repo's `berth` remote).

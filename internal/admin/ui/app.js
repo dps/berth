@@ -104,6 +104,16 @@ async function api(path) {
   return res.json();
 }
 
+// post changes something. Only the Tools page does: everything else on this
+// page is read-only. berthd refuses a POST that didn't come from this page.
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body), redirect: "manual", cache: "no-store" });
+  if (res.type === "opaqueredirect" || res.status === 401 || res.status === 302) throw new Error("signed-out");
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  lastOK = Date.now();
+  return res.json();
+}
+
 function tickUpdated() {
   const s = lastOK ? Math.round((Date.now() - lastOK) / 1000) : null;
   $("#updated").textContent = s === null ? "Loading…" : s < 3 ? "Live" : `Updated ${s}s ago`;
@@ -162,6 +172,7 @@ async function route() {
     if (parts[0] === "apps" && parts[1]) await appPage(parts[1]);
     else if (parts[0] === "events") await eventsPage();
     else if (parts[0] === "ai") await aiPage();
+    else if (parts[0] === "tools") await toolsPage();
     else await overviewPage();
   } catch (e) {
     showError(e);
@@ -845,6 +856,232 @@ function renderAI() {
           ${(ai.providers || []).map((p) => `<dt class="mono">${esc(p.name)}</dt><dd>${p.has_key ? status("good", "Key set") : status("idle", "No key")} <span class="muted mono">${esc(p.url)}</span></dd>`).join("")}
         </dl></div>
     </div>`;
+}
+
+// ---------- tools ----------
+
+let tools = null;
+let toolsEditing = null; // the app whose access is open for editing
+
+async function toolsPage() {
+  markNav("tools");
+  overview = await api("/api/overview");
+  chrome(overview);
+  tools = await api("/api/tools");
+  toolsEditing = null;
+  main.innerHTML = `<div id="tools-page">
+    <div class="page-head"><div><h1>Tools</h1><div class="sub">Add a key once and every app you allow can use it. Apps never see your keys.</div></div></div>
+    <div class="grid cols-3" id="tools-tiles"></div>
+    <div class="notice hidden" id="tools-notice" role="status"></div>
+    <div class="section"><h2>API keys</h2><div class="provider-grid" id="tools-keys"></div><p class="muted fine" id="tools-keyless"></p></div>
+    <div class="section"><div class="card flush"><h2>Tools <span class="count" id="tools-count"></span></h2><div class="table-wrap" id="tools-list"></div></div></div>
+    <div class="section"><div class="card flush"><h2>Apps</h2><div class="table-wrap" id="tools-apps"></div></div></div>
+  </div>`;
+  const page = $("#tools-page");
+  page.addEventListener("click", toolsClick);
+  page.addEventListener("submit", toolsSubmit);
+  renderTools();
+}
+
+function renderTools() {
+  renderToolsTiles();
+  renderToolsKeys();
+  renderToolsList();
+  renderToolsApps();
+}
+
+function renderToolsTiles() {
+  const list = tools.tools || [], keyed = (tools.providers || []).filter((p) => p.signup), apps = tools.apps || [];
+  const ready = list.filter((t) => (t.providers || []).length).length;
+  $("#tools-tiles").innerHTML =
+    `<div class="card tile"><div class="label">Tools ready</div><div class="value num">${ready} <small>of ${list.length}</small></div><div class="foot">${ready === list.length ? "All set" : "Add a key to enable the rest"}</div></div>
+     <div class="card tile"><div class="label">Keys saved</div><div class="value num">${keyed.filter((p) => p.has_key).length} <small>of ${keyed.length}</small></div><div class="foot">kept on this Mac</div></div>
+     <div class="card tile"><div class="label">Calls this month</div><div class="value num">${num(apps.reduce((s, a) => s + a.used, 0))}</div><div class="foot">across ${apps.length} app${apps.length === 1 ? "" : "s"}</div></div>`;
+}
+
+function providerCard(p, typed) {
+  const budget = p.budget ? ` of ${num(p.budget)}` : "";
+  return `<form class="card provider" data-provider="${esc(p.name)}" autocomplete="off">
+    <div class="provider-head">
+      <strong>${esc(p.title)}</strong>
+      ${p.shared ? status("good", "Using AI gateway key") : p.has_key ? status("good", "Key saved") : status("idle", "No key")}
+    </div>
+    <div class="sub-line provider-tools"><span class="mono">${(p.tools || []).map(esc).join(", ")}</span> · ${num(p.today)}${budget} calls today</div>
+    <label class="field"><span>${p.shared ? "Use a different key" : p.has_key ? "Replace key" : "API key"}${p.hint ? ` <span class="muted">(${esc(p.hint)})</span>` : ""}</span>
+      <span class="inline"><input class="input mono" type="password" name="key" value="${esc(typed)}" autocomplete="new-password" spellcheck="false" placeholder="${p.shared ? "Optional" : p.has_key ? "••••••••  saved" : esc(p.hint || "Paste the key")}" aria-label="${esc(p.title)} API key">
+      <button class="btn primary" type="submit">Save</button></span>
+    </label>
+    <div class="provider-foot">
+      <label class="field small"><span>Daily limit</span><input class="input num" type="number" min="0" step="1" name="daily" value="${p.budget || ""}" placeholder="none" aria-label="${esc(p.title)} calls a day"></label>
+      <span class="spacer"></span>
+      ${p.has_key && p.test ? `<button class="btn" type="button" data-act="test">Test</button>` : ""}
+      ${p.shared ? "" : p.has_key ? `<button class="btn danger" type="button" data-act="remove">Remove</button>` : `<a class="link fine" href="${esc(p.signup)}" target="_blank" rel="noopener noreferrer">Get a key ↗</a>`}
+    </div>
+    <div class="provider-result fine hidden" role="status"></div>
+  </form>`;
+}
+
+function renderToolsKeys() {
+  // A key typed into one card survives a save on another.
+  const typed = {};
+  for (const f of document.querySelectorAll("#tools-keys form")) typed[f.dataset.provider] = f.elements.key.value;
+  const all = tools.providers || [];
+  $("#tools-keys").innerHTML = all.filter((p) => p.signup).map((p) => providerCard(p, typed[p.name] || "")).join("");
+  const free = all.filter((p) => !p.signup);
+  $("#tools-keyless").innerHTML = free.length ? "No key needed: " + free.map((p) => `<strong>${esc(p.title)}</strong> (${(p.tools || []).map(esc).join(", ")})${p.note ? ", " + esc(p.note) : ""}`).join("; ") + "." : "";
+}
+
+function renderToolsList() {
+  const list = tools.tools || [];
+  $("#tools-count").textContent = list.length;
+  $("#tools-list").innerHTML = `<table><thead><tr><th>Tool</th><th>What it does</th><th>Providers</th><th>Status</th></tr></thead><tbody>
+    ${list.map((t) => {
+      const order = t.order || [];
+      const chips = order.map((n, i) => {
+        const ready = (t.providers || []).includes(n);
+        const label = `${order.length > 1 ? `<span class="rank">${i + 1}</span>` : ""}${esc(n)}`;
+        if (i === 0 || order.length < 2) return `<span class="chip ${ready ? "" : "off"}">${label}</span>`;
+        return `<button class="chip ${ready ? "" : "off"}" type="button" data-act="first" data-tool="${esc(t.name)}" data-to="${esc(n)}" title="Try ${esc(n)} first">${label}</button>`;
+      }).join("");
+      return `<tr><td class="mono">${esc(t.name)}</td><td class="ink2">${esc(t.summary)}${t.costly ? ` <span class="pill" title="Apps get this only if you tick it for them">costly</span>` : ""}</td>
+        <td><span class="chips">${chips}</span>${t.custom ? ` <button class="linkbtn fine" type="button" data-act="reset" data-tool="${esc(t.name)}">Reset</button>` : ""}</td>
+        <td>${(t.providers || []).length ? status("good", "Ready via " + t.providers[0]) : status("idle", "Needs a key")}</td></tr>`;
+    }).join("")}
+  </tbody></table>`;
+}
+
+// allows mirrors tools.Allowed: no list means everything but costly tools.
+const allows = (patterns, t) => patterns?.length ? patterns.some((p) => p === "*" || p === t.name || (p.endsWith(".*") && t.name.startsWith(p.slice(0, -1)))) : !t.costly;
+const toolGroups = () => {
+  const groups = {};
+  for (const t of tools.tools || []) (groups[t.name.split(".")[0]] ||= []).push(t);
+  return groups;
+};
+
+// toolPatterns turns the ticked boxes into the shortest allow list: nothing
+// for all but costly tools, * for all of them, and group.* for a whole
+// group, so tools added later are included.
+function toolPatterns(form) {
+  const ticked = [...form.querySelectorAll("input[name=tool]:checked")].map((i) => i.value);
+  const all = tools.tools || [];
+  if (ticked.length === all.length) return ["*"];
+  if (all.every((t) => ticked.includes(t.name) === !t.costly)) return [];
+  return Object.entries(toolGroups()).flatMap(([g, list]) => list.every((t) => ticked.includes(t.name)) ? [g + ".*"] : list.filter((t) => ticked.includes(t.name)).map((t) => t.name));
+}
+
+function appEditor(a) {
+  const groups = Object.entries(toolGroups()).map(([g, list]) => `<fieldset class="tool-group"><legend>${esc(g)}</legend>
+    ${list.map((t) => `<label class="check"><input type="checkbox" name="tool" value="${esc(t.name)}" ${allows(a.tools, t) ? "checked" : ""}><span class="mono">${esc(t.name.split(".")[1])}</span>${t.costly ? ` <span class="pill">costly</span>` : ""}</label>`).join("")}</fieldset>`).join("");
+  return `<tr class="editor"><td colspan="4"><form data-app="${esc(a.app)}" autocomplete="off">
+    <div class="tool-groups">${groups}</div>
+    <div class="provider-foot">
+      <label class="field small"><span>Calls a month</span><input class="input num" type="number" min="0" name="monthly" value="${a.monthly_calls || ""}" placeholder="no cap"></label>
+      <label class="field small"><span>Calls a minute</span><input class="input num" type="number" min="0" name="rpm" value="${a.rpm || ""}" placeholder="no cap"></label>
+      ${a.dev ? `<label class="check"><input type="checkbox" name="full" ${a.keyless_only ? "" : "checked"}><span>Let this dev version spend your keys</span></label>` : ""}
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-act="cancel">Cancel</button>
+      <button class="btn primary" type="submit">Save</button>
+    </div>
+  </form></td></tr>`;
+}
+
+function renderToolsApps() {
+  const apps = tools.apps || [], others = tools.others || [];
+  const rows = apps.map((a) => {
+    const total = (tools.tools || []).length;
+    const count = (tools.tools || []).filter((t) => allows(a.tools, t)).length;
+    const f = a.monthly_calls ? a.used / a.monthly_calls : 0;
+    return `<tr><td><a class="app-name" href="#/apps/${encodeURIComponent(a.app)}">${esc(a.app)}</a></td>
+      <td>${status("good", "On")} <span class="muted fine">${`${count} of ${total} tools`}${a.keyless_only ? " · keyless only" : ""}</span></td>
+      ${a.monthly_calls ? `<td class="cell-meter">${num(a.used)} of ${num(a.monthly_calls)}<div class="meter ${f > 0.85 ? "hot" : ""}"><span style="width:${Math.min(100, f * 100).toFixed(0)}%"></span></div></td>` : `<td class="num">${num(a.used)} <span class="muted">calls this month</span></td>`}
+      <td class="r"><button class="btn" type="button" data-act="edit" data-app="${esc(a.app)}">Edit</button> <button class="btn danger" type="button" data-act="disable" data-app="${esc(a.app)}">Turn off</button></td></tr>
+      ${toolsEditing === a.app ? appEditor(a) : ""}`;
+  }).concat(others.map((name) => `<tr><td><a class="app-name" href="#/apps/${encodeURIComponent(name)}">${esc(name)}</a></td><td>${status("idle", "Off")}</td><td></td>
+      <td class="r"><button class="btn" type="button" data-act="enable" data-app="${esc(name)}">Turn on</button></td></tr>`));
+  $("#tools-apps").innerHTML = `<table><thead><tr><th>App</th><th>Access</th><th>Usage</th><th></th></tr></thead><tbody>
+    ${rows.join("") || `<tr><td colspan="4" class="empty">No apps yet.</td></tr>`}</tbody></table>`;
+}
+
+function toolsNotice(msg, bad) {
+  const n = $("#tools-notice");
+  if (!n) return;
+  n.textContent = msg;
+  n.classList.toggle("bad", !!bad);
+  n.classList.remove("hidden");
+}
+
+// toolsDo runs one change with its button disabled, then shows the result.
+async function toolsDo(button, fn, ok) {
+  if (button) button.disabled = true;
+  try {
+    tools = await fn();
+    renderTools();
+    if (ok) toolsNotice(ok);
+    else $("#tools-notice")?.classList.add("hidden");
+  } catch (e) {
+    if (e.message === "signed-out") return showError(e);
+    toolsNotice(e.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function toolsClick(e) {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act, app = b.dataset.app, form = b.closest("form");
+  const provider = form?.dataset.provider;
+  if (act === "edit") { toolsEditing = toolsEditing === app ? null : app; renderToolsApps(); }
+  else if (act === "cancel") { toolsEditing = null; renderToolsApps(); }
+  else if (act === "enable") toolsDo(b, () => post("/api/tools/enable", { app }), `${app} can use tools. It's redeploying to pick up its token.`);
+  else if (act === "disable") {
+    if (confirm(`Turn tools off for ${app}? Its token stops working now, and it redeploys.`)) toolsDo(b, () => post("/api/tools/disable", { app }), `Tools are off for ${app}.`);
+  } else if (act === "first") {
+    const t = tools.tools.find((x) => x.name === b.dataset.tool);
+    toolsDo(b, () => post("/api/tools/use", { tool: t.name, providers: [b.dataset.to, ...t.order.filter((n) => n !== b.dataset.to)] }));
+  } else if (act === "reset") toolsDo(b, () => post("/api/tools/use", { tool: b.dataset.tool }));
+  else if (act === "remove") {
+    if (confirm(`Remove the ${provider} key? Tools that rely on it stop working for every app.`)) toolsDo(b, () => post("/api/tools/key", { provider, remove: true }), `Removed the ${provider} key.`);
+  } else if (act === "test") {
+    const out = form.querySelector(".provider-result");
+    b.disabled = true;
+    out.className = "provider-result fine";
+    out.textContent = "Testing…";
+    try {
+      const r = await post("/api/tools/test", { provider });
+      out.innerHTML = status("good", `Works: ${r.tool} answered in ${ms(r.ms)}`);
+    } catch (err) {
+      out.innerHTML = status("critical", err.message === "signed-out" ? "Signed out" : err.message);
+    } finally {
+      b.disabled = false;
+      api("/api/tools").then((t) => { tools = t; renderToolsTiles(); }).catch(() => {});
+    }
+  }
+}
+
+function toolsSubmit(e) {
+  e.preventDefault();
+  const form = e.target, button = form.querySelector("button[type=submit]");
+  if (form.dataset.provider) {
+    const provider = form.dataset.provider, key = form.elements.key.value.trim();
+    const p = tools.providers.find((x) => x.name === provider);
+    const daily = Number(form.elements.daily.value || 0);
+    const body = { provider };
+    if (key) body.key = key;
+    if (daily !== (p.budget || 0)) body.daily = daily;
+    if (!key && !("daily" in body)) return toolsNotice(`Paste a key for ${p.title} first.`, true);
+    toolsDo(button, async () => {
+      const t = await post("/api/tools/key", body);
+      form.elements.key.value = ""; // gone from the page as soon as it's saved
+      return t;
+    }, key ? `Saved the ${p.title} key. Use Test to check it.` : `Updated the daily limit for ${p.title}.`);
+  } else if (form.dataset.app) {
+    const app = form.dataset.app, f = form.elements;
+    const patterns = toolPatterns(form);
+    if (!patterns.length && !form.querySelector("input[name=tool]:checked")) return toolsNotice(`Tick at least one tool, or turn tools off for ${app}.`, true);
+    const body = { app, tools: patterns, monthly_calls: Number(f.monthly.value || 0), rpm: Number(f.rpm.value || 0), full: !!f.full?.checked };
+    toolsDo(button, async () => { const t = await post("/api/tools/enable", body); toolsEditing = null; return t; }, `Updated ${app}.`);
+  }
 }
 
 route();

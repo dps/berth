@@ -83,6 +83,7 @@ type Config struct {
 	AuthAddr       string `json:"auth_addr"`      // berthd's sign-in server, behind Caddy
 	AIAddr         string `json:"ai_addr"`        // berthd's AI gateway, behind Caddy
 	AdminAddr      string `json:"admin_addr"`     // berthd's admin page, behind Caddy and sign-in
+	ToolsAddr      string `json:"tools_addr"`     // the tools gateway, behind Caddy
 	AIPort         int    `json:"ai_port"`        // where apps reach the AI gateway on the berth network gateway
 	PortMin        int    `json:"port_min"`
 	PortMax        int    `json:"port_max"`
@@ -114,6 +115,7 @@ func DefaultConfig() *Config {
 		AuthAddr:        "127.0.0.1:7781",
 		AIAddr:          "127.0.0.1:7782",
 		AdminAddr:       "127.0.0.1:7783",
+		ToolsAddr:       "127.0.0.1:7784",
 		AIPort:          7790,
 		PortMin:         8001,
 		PortMax:         8999,
@@ -253,12 +255,13 @@ type App struct {
 	// Preview is the pull request number on a PR preview (which also has
 	// DevOf set). On the parent, PreviewsOn turns them on and PreviewMax
 	// caps how many run at once.
-	Preview    int    `json:"preview,omitempty"`
-	PreviewsOn bool   `json:"previews_on,omitempty"`
-	PreviewMax int    `json:"preview_max,omitempty"`
-	AI         *AppAI `json:"ai,omitempty"` // access to the AI gateway
-	DeployKey  bool   `json:"deploy_key,omitempty"`
-	Stopped    bool   `json:"stopped,omitempty"`
+	Preview    int       `json:"preview,omitempty"`
+	PreviewsOn bool      `json:"previews_on,omitempty"`
+	PreviewMax int       `json:"preview_max,omitempty"`
+	AI         *AppAI    `json:"ai,omitempty"`    // access to the AI gateway
+	Tools      *AppTools `json:"tools,omitempty"` // access to the tools gateway
+	DeployKey  bool      `json:"deploy_key,omitempty"`
+	Stopped    bool      `json:"stopped,omitempty"`
 	// Scale is how many containers run per worker process type; a type
 	// that isn't listed runs one.
 	Scale      map[string]int `json:"scale,omitempty"`

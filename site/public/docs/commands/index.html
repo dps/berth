@@ -74,6 +74,7 @@
       </ul>
       <h2>More</h2>
       <ul>
+        <li><a href="/docs/tools-for-your-apps/">Tools for your apps</a></li>
         <li><a href="/docs/license/">License</a></li>
       </ul>
     </nav>
@@ -315,6 +316,18 @@ agents want. <code>berth &lt;command&gt; --help</code> has more on each.</p>
 <tr>
 <td><code>berth ai:status</code> · <code>ai:models</code> · <code>ai:pull &lt;model&gt;</code> · <code>ai:usage [app] [--month m]</code></td>
 <td>what's available, downloads, usage</td>
+</tr>
+<tr>
+<td><code>berth tools</code> · <code>tools:docs [app]</code> · <code>tools:call &lt;tool&gt; [json]</code> · <code>tools:usage [app] [--month m]</code></td>
+<td>the tools gateway: what's available, how to call it, trying it, usage</td>
+</tr>
+<tr>
+<td><code>berth tools:key &lt;provider&gt; [key] [--daily n] [--remove]</code> · <code>tools:use &lt;tool&gt; [providers]</code></td>
+<td>provider keys held by Berth, and which provider serves a tool</td>
+</tr>
+<tr>
+<td><code>berth tools:enable &lt;app&gt; [--tools …] [--monthly-calls n] [--rpm n] [--full]</code> · <code>tools:disable &lt;app&gt;</code></td>
+<td>give or revoke an app's access</td>
 </tr>
 <tr>
 <td><strong>Running the Mac</strong></td>
