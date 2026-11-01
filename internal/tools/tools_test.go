@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -568,43 +569,56 @@ func TestCostlyToolsNeedAGrant(t *testing.T) {
 	}
 }
 
-func TestSoraVideoJob(t *testing.T) {
-	polls := 0
-	r := newRig(t, state.AppTools{Tools: []string{"*"}}, nil, map[string]string{"openai": "o"}, func(w http.ResponseWriter, q *http.Request) {
-		switch q.Method + " " + q.URL.Path {
-		case "POST /v1/videos":
-			var b map[string]any
-			json.NewDecoder(q.Body).Decode(&b)
-			if b["size"] != "720x1280" || b["seconds"] != "8" || b["model"] != openAIVideoModel {
-				t.Errorf("%v", b)
-			}
-			io.WriteString(w, `{"id":"video_1","status":"queued"}`)
-		case "GET /v1/videos/video_1":
-			polls++
-			io.WriteString(w, `{"status":"completed"}`)
-		case "GET /v1/videos/video_1/content":
-			io.WriteString(w, "mp4")
-		default:
-			t.Errorf("unexpected %s %s", q.Method, q.URL.Path)
+func TestOmniVideoRequest(t *testing.T) {
+	r := newRig(t, state.AppTools{Tools: []string{"*"}}, nil, map[string]string{"gemini": "g"}, func(w http.ResponseWriter, q *http.Request) {
+		var b struct {
+			Model      string `json:"model"`
+			Input      string `json:"input"`
+			Background bool   `json:"background"`
+			Format     struct {
+				Type   string `json:"type"`
+				Aspect string `json:"aspect_ratio"`
+			} `json:"response_format"`
 		}
+		json.NewDecoder(q.Body).Decode(&b)
+		if b.Model != geminiVideoModel || b.Input != "a boat" || !b.Background || b.Format.Type != "video" || b.Format.Aspect != "9:16" {
+			t.Errorf("%+v", b)
+		}
+		io.WriteString(w, `{"id":"v1_abc","status":"in_progress"}`)
 	})
-	got := r.post(t, "/v1/video/generate", `{"prompt":"a boat","aspect_ratio":"9:16","seconds":"8"}`)
-	if got.status != 202 || got.Meta.Provider != "openai" {
+	got := r.post(t, "/v1/video/generate", `{"prompt":"a boat","aspect_ratio":"9:16"}`)
+	if got.status != 202 || got.Meta.Provider != "gemini" {
 		t.Fatalf("%d %s", got.status, got.raw)
 	}
-	var start struct {
-		Job jobView `json:"job"`
-	}
-	json.Unmarshal([]byte(got.raw), &start)
-	j, _ := r.g.jobs.load(start.Job.ID)
-	j.Polled = time.Time{}
-	r.g.jobs.save(j)
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/jobs/"+start.Job.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+r.token)
-	r.g.ServeHTTP(w, req)
-	if polls != 1 || !strings.Contains(w.Body.String(), `"status":"done"`) || !strings.Contains(w.Body.String(), `"content_type":"video/mp4"`) {
-		t.Fatalf("%d polls: %s", polls, w.Body)
+}
+
+func TestOmniVideoWithoutAVideoFails(t *testing.T) {
+	for _, answer := range []string{
+		`{"status":"failed","error":{"message":"it broke"}}`,
+		`{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"I can't make that."}]}]}`,
+	} {
+		r := newRig(t, state.AppTools{Tools: []string{"*"}}, nil, map[string]string{"gemini": "g"}, func(w http.ResponseWriter, q *http.Request) {
+			if q.Method == http.MethodPost {
+				io.WriteString(w, `{"id":"v1_abc","status":"in_progress"}`)
+				return
+			}
+			io.WriteString(w, answer)
+		})
+		got := r.post(t, "/v1/video/generate", `{"prompt":"a boat"}`)
+		var start struct {
+			Job jobView `json:"job"`
+		}
+		json.Unmarshal([]byte(got.raw), &start)
+		j, _ := r.g.jobs.load(start.Job.ID)
+		j.Polled = time.Time{}
+		r.g.jobs.save(j)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/jobs/"+start.Job.ID, nil)
+		req.Header.Set("Authorization", "Bearer "+r.token)
+		r.g.ServeHTTP(w, req)
+		if !strings.Contains(w.Body.String(), `"status":"failed"`) {
+			t.Fatalf("%s: %s", answer, w.Body)
+		}
 	}
 }
 
@@ -614,21 +628,19 @@ func TestVideoJobSurvivesARestart(t *testing.T) {
 		if q.Header.Get("X-Goog-Api-Key") != "video-key" {
 			t.Errorf("%s key %q", q.URL.Path, q.Header.Get("X-Goog-Api-Key"))
 		}
-		switch {
-		case strings.HasSuffix(q.URL.Path, ":predictLongRunning"):
-			io.WriteString(w, `{"name":"models/veo/operations/abc"}`)
-		case strings.HasSuffix(q.URL.Path, "/operations/abc"):
+		switch q.Method + " " + q.URL.Path {
+		case "POST /v1beta/interactions":
+			io.WriteString(w, `{"id":"v1_abc","status":"in_progress"}`)
+		case "GET /v1beta/interactions/v1_abc":
 			polls++
 			if polls == 1 {
-				io.WriteString(w, `{"done":false}`)
+				io.WriteString(w, `{"id":"v1_abc","status":"in_progress"}`)
 				return
 			}
-			io.WriteString(w, `{"done":true,"response":{"generateVideoResponse":{"generatedSamples":[{"video":{"uri":"https://generativelanguage.googleapis.com/v1beta/files/x:download"}}]}}}`)
-		case strings.HasSuffix(q.URL.Path, ":download"):
-			w.Header().Set("Content-Type", "video/mp4")
-			io.WriteString(w, "fake video bytes")
+			video := base64.StdEncoding.EncodeToString([]byte("fake video bytes"))
+			io.WriteString(w, `{"id":"v1_abc","status":"completed","steps":[{"type":"thought","content":[{"type":"thought","text":"hm"}]},{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":"`+video+`"}]}]}`)
 		default:
-			t.Errorf("unexpected %s", q.URL.Path)
+			t.Errorf("unexpected %s %s", q.Method, q.URL.Path)
 		}
 	})
 	w := httptest.NewRecorder()
@@ -639,7 +651,7 @@ func TestVideoJobSurvivesARestart(t *testing.T) {
 		Job jobView `json:"job"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &start)
-	if w.Code != 202 || start.Job.Status != "running" || strings.Contains(w.Body.String(), "operations/abc") {
+	if w.Code != 202 || start.Job.Status != "running" || strings.Contains(w.Body.String(), "v1_abc") {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	backdate := func() {

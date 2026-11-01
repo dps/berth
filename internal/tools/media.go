@@ -20,10 +20,10 @@ const (
 	geminiAPI        = "https://generativelanguage.googleapis.com/v1beta/"
 	geminiImageModel = "gemini-3.1-flash-image"
 	geminiTextModel  = "gemini-flash-latest" // Google keeps this alias current
-	geminiVideoModel = "veo-3.1-fast-generate-preview"
+	geminiVideoModel = "gemini-omni-1.1-flash"
+	geminiRevision   = "2026-05-20" // the Interactions API's answers change with this
 	openAIAPI        = "https://api.openai.com/v1/"
 	openAIImageModel = "chatgpt-image-latest" // OpenAI keeps this alias current
-	openAIVideoModel = "sora-2"
 	openAISpeech     = "gpt-4o-mini-tts"
 	openAITranscribe = "gpt-4o-transcribe"
 	elevenLabsModel  = "eleven_turbo_v2_5"
@@ -136,13 +136,12 @@ func init() {
 		Input: []Field{
 			{Name: "prompt", Type: "string", Required: true},
 			{Name: "aspect_ratio", Type: "string", Enum: []string{"16:9", "9:16"}, Desc: "Default 16:9."},
-			{Name: "seconds", Type: "string", Enum: []string{"4", "8", "12"}, Desc: "Default 4. Longer costs more; Gemini chooses its own length."},
 		},
 		Output: []Field{file},
 		Costly: true,
-		Order:  []string{"openai", "gemini"},
-		Run:    map[string]RunFunc{"openai": openAIVideo, "gemini": geminiVideo},
-		Poll:   map[string]PollFunc{"openai": openAIVideoPoll, "gemini": geminiVideoPoll},
+		Order:  []string{"gemini"},
+		Run:    map[string]RunFunc{"gemini": geminiVideo},
+		Poll:   map[string]PollFunc{"gemini": geminiVideoPoll},
 	})
 }
 
@@ -315,71 +314,81 @@ func geminiVideo(ctx context.Context, c *Call, args map[string]any) (any, error)
 	if aspect == "" {
 		aspect = "16:9"
 	}
-	body := map[string]any{"instances": []any{map[string]any{"prompt": str(args, "prompt")}}, "parameters": map[string]any{"aspectRatio": aspect}}
-	var r struct {
-		Name string `json:"name"`
+	body := map[string]any{
+		"model": geminiVideoModel, "input": str(args, "prompt"), "background": true,
+		"response_format": map[string]any{"type": "video", "aspect_ratio": aspect},
 	}
-	err := c.postJSON(ctx, geminiAPI+"models/"+geminiVideoModel+":predictLongRunning", map[string]string{"x-goog-api-key": c.Key}, body, &r)
+	var r struct {
+		ID string `json:"id"`
+	}
+	err := c.postJSON(ctx, geminiAPI+"interactions", map[string]string{"x-goog-api-key": c.Key, "Api-Revision": geminiRevision}, body, &r)
 	if err != nil {
 		return nil, refused(err, "prompt")
 	}
-	if r.Name == "" {
-		return nil, errors.New("answered with no operation")
+	if r.ID == "" {
+		return nil, errors.New("answered with no interaction")
 	}
-	return Pending{r.Name}, nil
+	return Pending{r.ID}, nil
 }
 
 func geminiVideoPoll(ctx context.Context, c *Call, op string) (any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(geminiAPI+op), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(geminiAPI+"interactions/"+url.PathEscape(op)), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("x-goog-api-key", c.Key)
+	req.Header.Set("Api-Revision", geminiRevision)
 	var r struct {
-		Done  bool `json:"done"`
-		Error *struct {
+		Status string `json:"status"`
+		Error  *struct {
 			Message string `json:"message"`
 		} `json:"error"`
-		Response struct {
-			Video struct {
-				Samples []struct {
-					Video struct {
-						URI string `json:"uri"`
-					} `json:"video"`
-				} `json:"generatedSamples"`
-				Filtered []string `json:"raiMediaFilteredReasons"`
-			} `json:"generateVideoResponse"`
-		} `json:"response"`
+		Steps []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+				Data string `json:"data"`
+			} `json:"content"`
+		} `json:"steps"`
 	}
 	if err := c.do(req, &r); err != nil {
 		return nil, err
 	}
-	if !r.Done {
+	switch r.Status {
+	case "completed":
+	case "failed", "cancelled":
+		msg := "the provider made no video"
+		if r.Error != nil && r.Error.Message != "" {
+			msg = "the provider failed: " + r.Error.Message
+		}
+		return nil, errorf(http.StatusBadGateway, "provider_failed", "%s", msg)
+	default:
 		return nil, nil
 	}
-	if r.Error != nil {
-		return nil, errorf(http.StatusBadGateway, "provider_failed", "the provider failed: %s", r.Error.Message)
-	}
-	v := r.Response.Video
-	if len(v.Samples) == 0 {
-		if len(v.Filtered) > 0 {
-			return nil, badInput("the provider's safety filter stopped this video")
+	// A safety filter finishes the interaction with words in place of a video.
+	said := ""
+	for _, step := range r.Steps {
+		if step.Type != "model_output" {
+			continue
 		}
-		return nil, errorf(http.StatusBadGateway, "provider_failed", "the provider made no video")
+		for _, part := range step.Content {
+			if part.Type == "text" {
+				said = part.Text
+			}
+			if part.Type == "video" && part.Data != "" {
+				data, err := base64.StdEncoding.DecodeString(part.Data)
+				if err != nil {
+					return nil, errors.New("answered with a bad video")
+				}
+				return c.keep("video/mp4", data)
+			}
+		}
 	}
-	dl, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(v.Samples[0].Video.URI), nil)
-	if err != nil {
-		return nil, err
+	if said != "" {
+		return nil, errorf(http.StatusBadGateway, "provider_failed", "the provider made no video: %s", said)
 	}
-	dl.Header.Set("x-goog-api-key", c.Key)
-	data, ct, err := c.fetch(dl)
-	if err != nil {
-		return nil, err
-	}
-	if ct == "" || strings.HasPrefix(ct, "application/octet-stream") {
-		ct = "video/mp4"
-	}
-	return c.keep(ct, data)
+	return nil, errorf(http.StatusBadGateway, "provider_failed", "the provider made no video")
 }
 
 // ---- OpenAI ----
@@ -412,70 +421,6 @@ func openAIImage(ctx context.Context, c *Call, args map[string]any) (any, error)
 		return nil, errors.New("answered with a bad image")
 	}
 	return c.keep("image/png", data)
-}
-
-func openAIVideo(ctx context.Context, c *Call, args map[string]any) (any, error) {
-	size := "1280x720"
-	if str(args, "aspect_ratio") == "9:16" {
-		size = "720x1280"
-	}
-	seconds := str(args, "seconds")
-	if seconds == "" {
-		seconds = "4"
-	}
-	var r struct {
-		ID string `json:"id"`
-	}
-	body := map[string]any{"model": openAIVideoModel, "prompt": str(args, "prompt"), "size": size, "seconds": seconds}
-	if err := c.postJSON(ctx, openAIAPI+"videos", c.bearer(), body, &r); err != nil {
-		return nil, refused(err, "prompt")
-	}
-	if r.ID == "" {
-		return nil, errors.New("answered with no video")
-	}
-	return Pending{r.ID}, nil
-}
-
-func openAIVideoPoll(ctx context.Context, c *Call, op string) (any, error) {
-	get := func(suffix string) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(openAIAPI+"videos/"+url.PathEscape(op)+suffix), nil)
-		if err == nil {
-			req.Header.Set("Authorization", "Bearer "+c.Key)
-		}
-		return req, err
-	}
-	req, err := get("")
-	if err != nil {
-		return nil, err
-	}
-	var r struct {
-		Status string `json:"status"`
-		Error  *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := c.do(req, &r); err != nil {
-		return nil, err
-	}
-	switch r.Status {
-	case "completed":
-	case "failed":
-		msg := "the provider made no video"
-		if r.Error != nil && r.Error.Message != "" {
-			msg = "the provider failed: " + r.Error.Message
-		}
-		return nil, errorf(http.StatusBadGateway, "provider_failed", "%s", msg)
-	default:
-		return nil, nil
-	}
-	if req, err = get("/content"); err != nil {
-		return nil, err
-	}
-	data, _, err := c.fetch(req)
-	if err != nil {
-		return nil, err
-	}
-	return c.keep("video/mp4", data)
 }
 
 var openAIVoices = map[string]string{"female": "nova", "male": "onyx"}

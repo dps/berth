@@ -451,7 +451,7 @@ app container ──Bearer berth_tools_<token>──▶ Caddy :7790 /tools/* (co
 
 *Files.* Results too big for JSON go in `tools/files/` for 24 hours (4 GB at most, oldest first) and tools return `{"file":{id,url,content_type,bytes,expires}}`. A file belongs to the app that made it: another app's token gets a 404, from `GET /v1/files/<id>` and when passing the id to a tool. `POST /v1/files` uploads up to 64 MB. File arguments take a URL, a `data:` URI or a file id; a URL goes through the same public-only client as `web.fetch`, so these tools can't read the Mac's network either. Tools that make files aren't cached.
 
-*Jobs.* `video.generate` answers 202 with a job. Nothing in the gateway waits on it: the job file in `tools/jobs/` holds the provider's operation name, and `GET /v1/jobs/<id>` asks the provider, at most every 5 seconds, downloading the result when it's done. So a job survives a restart and costs nothing while nobody asks. It gives up after an hour. The operation name stays on the Mac.
+*Jobs.* `video.generate` answers 202 with a job. Nothing in the gateway waits on it: the job file in `tools/jobs/` holds the provider's operation name, and `GET /v1/jobs/<id>` asks the provider, at most every 5 seconds, keeping the result when it's done. So a job survives a restart and costs nothing while nobody asks. It gives up after an hour. The operation name stays on the Mac.
 
 *Costly tools.* A tool marked `Costly` isn't included by an empty allow list, so `tools:enable` without `--tools` doesn't grant it; `video.*` or `*` does, and the admin page has a box for it. The owner's `tools:call` and Test aren't limited.
 

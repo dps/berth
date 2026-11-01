@@ -166,7 +166,7 @@ not from a browser.</p>
 <tr>
 <td><code>video.generate</code></td>
 <td>make a short video; a job, and costly</td>
-<td><code>openai</code>, <code>gemini</code></td>
+<td><code>gemini</code></td>
 </tr>
 </tbody>
 </table>
@@ -202,7 +202,11 @@ it, and browsers can't reach the gateway, so a file's <code>url</code> won't wor
 <code>done</code>, with <code>result</code>, or <code>failed</code>, with <code>error</code>. A job survives Berth
 restarting.</p>
 <p>Video can run up a real bill in a few calls, so <code>tools:enable</code> leaves it out
-unless you name it: <code>--tools 'video.*'</code>, or <code>--tools '*'</code> for everything.</p>
+unless you name it: <code>--tools 'video.*'</code>, or <code>--tools '*'</code> for everything.
+Gemini video needs a paid Gemini API key.</p>
+<p>A tool that fails answers 502. If your app passes that on to a browser, answer
+500 instead: Cloudflare swaps a 502 for its own HTML error page, and your
+message is lost.</p>
 <h2 id="from-the-admin-page">From the admin page</h2>
 <p>The <strong>Tools</strong> tab on the <a href="/docs/the-admin-page/">admin page</a> does all of this in a
 browser: paste as many keys as you like, test each one with a real call, set

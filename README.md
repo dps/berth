@@ -1098,7 +1098,7 @@ not from a browser.
 | `audio.transcribe` | speech to text | `openai` |
 | `text.translate` | translate text | `deepl`, `ai` |
 | `pdf.parse` | read a PDF as Markdown | `gemini` |
-| `video.generate` | make a short video; a job, and costly | `openai`, `gemini` |
+| `video.generate` | make a short video; a job, and costly | `gemini` |
 
 Apps name the tool, not the vendor, so you can change provider without touching
 them. `berth tools:use web.search serpapi,exa` takes effect on the next call,
@@ -1144,6 +1144,11 @@ restarting.
 
 Video can run up a real bill in a few calls, so `tools:enable` leaves it out
 unless you name it: `--tools 'video.*'`, or `--tools '*'` for everything.
+Gemini video needs a paid Gemini API key.
+
+A tool that fails answers 502. If your app passes that on to a browser, answer
+500 instead: Cloudflare swaps a 502 for its own HTML error page, and your
+message is lost.
 
 ### From the admin page
 

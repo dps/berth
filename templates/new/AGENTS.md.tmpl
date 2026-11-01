@@ -126,7 +126,9 @@ image generation, text to speech, transcription, translation and more, without
 holding any API keys: it sets
 `BERTH_TOOLS_URL` and `BERTH_TOOLS_KEY`. Every tool is a JSON POST from server
 code, in any language; `berth tools:docs {{.App}}` lists them with their
-arguments and `berth tools:call <tool> '{...}'` tries one.
+arguments and `berth tools:call <tool> '{...}'` tries one. A tool that fails
+answers 502: don't pass that status on to a browser, because Cloudflare replaces
+a 502 with its own HTML page. Answer 500 with the message instead.
 {{- end}}
 
 ### Ask the user first
