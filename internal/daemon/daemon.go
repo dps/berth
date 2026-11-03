@@ -70,6 +70,7 @@ type Daemon struct {
 	auth          *auth.Server   // sign-in; nil until Run
 	ai            *ai.Gateway    // AI gateway; nil until Run
 	tools         *toolsChild    // tools gateway process; nil until Run
+	mlx           *mlxChild      // MLX worker process; nil until Run
 	toolsDeploys  sync.WaitGroup // redeploys started by the admin page
 	authKey       ed25519.PrivateKey
 	stats         *analytics.Stats // request analytics from access logs; nil until Run
@@ -403,6 +404,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer aiSrv.Close()
 	d.startTools(d.ctx)
+	d.startMLX(d.ctx)
 	d.startAnalytics(d.ctx)
 	d.startLoad(d.ctx)
 	defer d.saveLoad()

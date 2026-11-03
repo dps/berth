@@ -103,13 +103,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		g.models(w, r)
-	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings"):
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/v1/interp/contrast"):
 		g.proxy(w, r, false)
 	case r.Method == http.MethodPost && (r.URL.Path == "/anthropic/v1/messages" || r.URL.Path == "/anthropic/v1/messages/count_tokens"):
 		g.proxy(w, r, true)
 	default:
 		apiError(w, strings.HasPrefix(r.URL.Path, "/anthropic/"), http.StatusNotFound, "not_found_error",
-			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models and /anthropic/v1/messages")
+			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models, /v1/interp/contrast and /anthropic/v1/messages")
 	}
 }
 
@@ -212,8 +212,12 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, anthropic bool) 
 			fmt.Sprintf("%s is served by %s; the Anthropic API here is for anthropic/ models (use /v1/chat/completions for the rest)", asked, t.Provider))
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/v1/interp/") && t.Provider != MLX {
+		apiError(w, false, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("%s can't show its neurons: interp needs an mlx/ model (berth ai:mlx)", asked))
+		return
+	}
 	key := keys[t.Provider]
-	if t.Provider != Local && key == "" {
+	if !Keyless(t.Provider) && key == "" {
 		apiError(w, anthropic, http.StatusServiceUnavailable, "api_error", fmt.Sprintf("no API key for %s on this Berth (berth ai:key %s)", t.Provider, t.Provider))
 		return
 	}
@@ -282,6 +286,9 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, anthropic bool) 
 		msg := fmt.Sprintf("%s didn't answer: %v", t.Provider, err)
 		if t.Provider == Local {
 			msg = fmt.Sprintf("Ollama isn't answering at %s (berth ai:setup starts it): %v", BaseURL(cfg, Local), err)
+		}
+		if t.Provider == MLX {
+			msg = fmt.Sprintf("the MLX worker isn't answering at %s (berth ai:mlx starts it): %v", MLXAddr(cfg), err)
 		}
 		g.record(app, asked, t, 0, 0, start, http.StatusBadGateway)
 		apiError(w, anthropic, http.StatusBadGateway, "api_error", msg)
@@ -431,6 +438,9 @@ func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
 		for _, m := range local {
 			add(Local+"/"+m.Name, "ollama")
 		}
+	}
+	if cfg.MLX != nil {
+		add(MLX+"/"+MLXName(cfg), "mlx worker (neurons open: /v1/interp/contrast, steer)")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})

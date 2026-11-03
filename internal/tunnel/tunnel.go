@@ -399,6 +399,10 @@ type rulesetRule struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+// MarketplacePath is where eBay sends account deletion notices, on the
+// webhook host. eBay publishes no IP ranges, so the filter below leaves it out.
+const MarketplacePath = "/marketplace/account-deletion"
+
 // FilterExpression blocks requests to the webhook host unless they come
 // from GitHub's hook ranges.
 // Only well-formed CIDRs from GitHub's /meta are used, and the host must be
@@ -416,7 +420,7 @@ func FilterExpression(hooksHost string, ranges []string) (string, error) {
 	if len(cidrs) == 0 {
 		return "", fmt.Errorf("no valid GitHub hook IP ranges")
 	}
-	return fmt.Sprintf(`(http.host eq "%s" and not ip.src in {%s})`, hooksHost, strings.Join(cidrs, " ")), nil
+	return fmt.Sprintf(`(http.host eq "%s" and http.request.uri.path ne "%s" and not ip.src in {%s})`, hooksHost, MarketplacePath, strings.Join(cidrs, " ")), nil
 }
 
 // SetWebhookFilter installs or updates Berth's WAF custom rule, preserving

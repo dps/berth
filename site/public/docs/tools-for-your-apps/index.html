@@ -174,6 +174,11 @@ not from a browser.</p>
 them. <code>berth tools:use web.search serpapi,exa</code> takes effect on the next call,
 and the second provider takes over if the first fails. Open-Meteo is free for
 non-commercial use; add a <code>weatherapi</code> key for anything else.</p>
+<p>eBay keeps a production keyset disabled until it has an endpoint for marketplace
+account deletion notices. <code>berth tools:ebay-deletion</code> turns one on and prints the
+URL and verification token to paste into eBay's Alerts &amp; Notifications page.
+Berth keeps no eBay user data, so it only acknowledges the notices: an app that
+stores eBay usernames has to handle those deletions itself.</p>
 <p><code>berth tools:docs myapp</code> prints the tools with their arguments as Markdown for
 a coding agent, <code>GET $BERTH_TOOLS_URL/v1/openapi.json</code> generates a client in
 any language, and <code>berth tools:call weather.current '{&quot;location&quot;:&quot;Paris&quot;}'</code>

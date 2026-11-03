@@ -70,76 +70,16 @@ func (d *Daemon) startTools(ctx context.Context) {
 	}
 	d.tools = &toolsChild{exe: exe, admin: randomHex(24), want: make(chan bool, 1)}
 	d.tools.ai, _ = ai.NewToken()
-	go d.tools.supervise(ctx)
+	go superviseChild(ctx, "tools gateway", d.tools.want, d.tools.setProc, d.tools.command)
 	apps, _ := d.Store.Apps()
 	d.configureTools(apps)
 }
 
-// supervise starts the child when it's wanted, and again if it dies,
-// waiting longer each time it dies quickly.
-func (c *toolsChild) supervise(ctx context.Context) {
-	wanted := false
-	delay := time.Second
-	for {
-		for !wanted {
-			select {
-			case wanted = <-c.want:
-			case <-ctx.Done():
-				return
-			}
-		}
-		cmd := exec.CommandContext(ctx, c.exe, "tools")
-		cmd.Env = append(os.Environ(), tools.AdminEnv+"="+c.admin, tools.AIEnv+"="+c.ai)
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-		// The child exits when this pipe closes, so it can't outlive
-		// berthd, even across a crash or a re-exec.
-		stdin, err := cmd.StdinPipe()
-		if err == nil {
-			err = cmd.Start()
-		}
-		if err != nil {
-			slog.Error("tools gateway", "err", err)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return
-			}
-			continue
-		}
-		c.setProc(cmd.Process)
-		started := time.Now()
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-	running:
-		for {
-			select {
-			case wanted = <-c.want:
-				if !wanted {
-					stdin.Close()
-				}
-			case err := <-done:
-				c.setProc(nil)
-				if ctx.Err() != nil {
-					return
-				}
-				if !wanted {
-					break running
-				}
-				slog.Warn("tools gateway exited; restarting", "err", err)
-				if time.Since(started) > time.Minute {
-					delay = time.Second
-				}
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					return
-				}
-				delay = min(delay*2, 30*time.Second)
-				break running
-			}
-		}
-		stdin.Close()
-	}
+// command is how the supervisor starts the gateway.
+func (c *toolsChild) command(ctx context.Context) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, c.exe, "tools")
+	cmd.Env = append(os.Environ(), tools.AdminEnv+"="+c.admin, tools.AIEnv+"="+c.ai)
+	return cmd, nil
 }
 
 // configureTools starts, stops or reloads the child to match the current

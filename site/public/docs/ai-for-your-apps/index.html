@@ -171,6 +171,34 @@ for a 4B one. Ollama lets go of it after 5 idle minutes. <code>berth status</cod
 what's loaded, counts it, and warns when apps, databases and the model
 together get close to the Mac's RAM. On an 8 GB Mac, use a cloud provider (or
 a really small model).</p>
+<h2 id="looking-inside-a-model">Looking inside a model</h2>
+<p>Ollama only answers. <code>berth ai:mlx</code> runs a second local model, with
+<a href="https://github.com/ml-explore/mlx">MLX</a> on the GPU, whose insides apps can
+read and change: Qwen3 8B in 4 bits unless you name another MLX model
+(<code>berth ai:mlx mlx-community/Qwen3-4B-4bit</code>). It sets up its own Python with
+<a href="https://docs.astral.sh/uv">uv</a> (offering <code>brew install uv</code>), downloads the
+model once (about 5 GB) and runs it as <code>mlx/Qwen3-8B-4bit</code>, through the same
+gateway, token and limits as any model. It loads on first use and lets go of
+its memory after 15 idle minutes.</p>
+<p>Two things only this model does:</p>
+<pre><code class="language-bash"># Which MLP neuron fires for a concept, and not for related ones?
+curl &quot;$OPENAI_BASE_URL/interp/contrast&quot; -H &quot;Authorization: Bearer $OPENAI_API_KEY&quot; \
+  -d '{&quot;model&quot;:&quot;mlx/Qwen3-8B-4bit&quot;,&quot;target&quot;:&quot;San Francisco&quot;,&quot;others&quot;:[&quot;Oakland&quot;,&quot;Seattle&quot;,&quot;Paris&quot;,&quot;...&quot;]}'
+
+# Chat with a concept turned up. A steer entry adds the concept's direction
+# (its activations less its neighbours') to one layer, or pins one neuron.
+curl &quot;$OPENAI_BASE_URL/chat/completions&quot; -H &quot;Authorization: Bearer $OPENAI_API_KEY&quot; \
+  -d '{&quot;model&quot;:&quot;mlx/Qwen3-8B-4bit&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;Plan my weekend&quot;}],
+       &quot;steer&quot;:[{&quot;layer&quot;:12,&quot;target&quot;:&quot;San Francisco&quot;,&quot;others&quot;:[&quot;Oakland&quot;,&quot;...&quot;],&quot;scale&quot;:3}],
+       &quot;frequency_penalty&quot;:1}'
+</code></pre>
+<p>The contrast answers with the best neurons, each with its layer, index,
+score and how hard it fired for every concept. A steer entry is either
+<code>{layer, target, others, scale}</code> or <code>{layer, neuron, value}</code>. Directions
+steer well around a third of the way through the model, at a scale of 2 to
+3; past that the model tends to say only the concept. One neuron, even the
+one that best picks the concept out, rarely changes what the model says
+before it breaks it.</p>
 <p>The gateway listens on port 7790 on the containers' network, and only
 containers on this Mac can reach it. To change the port, set <code>ai_port</code> in
 <code>~/.berth/config.json</code> and run <code>berth reload</code>. To use Ollama on another
@@ -189,6 +217,7 @@ machine, set <code>ollama_url</code> in <code>~/.berth/ai/config.json</code>.</p
       <li><a href="#choosing-models">Choosing models</a></li>
       <li><a href="#limits-and-usage">Limits and usage</a></li>
       <li><a href="#memory">Memory</a></li>
+      <li><a href="#looking-inside-a-model">Looking inside a model</a></li>
     </ul>
   </nav>
 </div>

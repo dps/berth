@@ -243,7 +243,7 @@ func TestToolsChildIsSupervised(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &toolsChild{exe: exe, want: make(chan bool, 1)}
-	go c.supervise(ctx)
+	go superviseChild(ctx, "tools gateway", c.want, c.setProc, c.command)
 	waitFor := func(what string, ok func(lines []string) bool) {
 		t.Helper()
 		for range 200 {

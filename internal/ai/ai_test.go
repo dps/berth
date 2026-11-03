@@ -151,6 +151,41 @@ func TestGatewayRoutesAndRewrites(t *testing.T) {
 	}
 }
 
+func TestGatewayMLX(t *testing.T) {
+	g := newTestGateway(t)
+	// Off: mlx/ models and interp are refused with how to turn it on.
+	if resp, body := g.do(t, "web", "/v1/interp/contrast", `{"model":"mlx/Qwen3-8B-4bit","target":"x"}`, nil); resp.StatusCode != 400 || !strings.Contains(body, "berth ai:mlx") {
+		t.Fatalf("mlx off: %d %s", resp.StatusCode, body)
+	}
+	// Interp only makes sense for the MLX worker's model.
+	if resp, body := g.do(t, "web", "/v1/interp/contrast", `{"model":"default","target":"x"}`, nil); resp.StatusCode != 400 || !strings.Contains(body, "interp needs an mlx/ model") {
+		t.Fatalf("interp on Ollama: %d %s", resp.StatusCode, body)
+	}
+	srv := httptest.NewServer(g.up)
+	t.Cleanup(srv.Close)
+	cfg, _, _ := g.snapshot()
+	on := *cfg
+	on.MLX = &state.AIMLX{Model: "mlx-community/Qwen3-8B-4bit", Addr: strings.TrimPrefix(srv.URL, "http://")}
+	g.mu.Lock()
+	g.cfg = &on
+	g.mu.Unlock()
+	// On: interp and steered chat reach the worker as sent, with no key.
+	if resp, body := g.do(t, "web", "/v1/interp/contrast", `{"model":"mlx/Qwen3-8B-4bit","target":"San Francisco","others":["a","b","c"]}`, nil); resp.StatusCode != 200 {
+		t.Fatalf("interp: %d %s", resp.StatusCode, body)
+	}
+	if s := g.up.last(); s.Path != "/v1/interp/contrast" || s.Body["target"] != "San Francisco" || s.Auth != "" {
+		t.Fatalf("worker saw %+v", s)
+	}
+	g.do(t, "web", "/v1/chat/completions", `{"model":"mlx/Qwen3-8B-4bit","messages":[],"steer":[{"layer":20,"neuron":7,"value":9}]}`, nil)
+	if s := g.up.last(); s.Path != "/v1/chat/completions" || s.Body["steer"] == nil || s.Body["model"] != "Qwen3-8B-4bit" {
+		t.Fatalf("worker saw %+v", s)
+	}
+	// The allow list applies: dev may only use local/*.
+	if resp, _ := g.do(t, "dev", "/v1/interp/contrast", `{"model":"mlx/Qwen3-8B-4bit"}`, nil); resp.StatusCode != 403 {
+		t.Fatalf("dev: %d", resp.StatusCode)
+	}
+}
+
 func TestGatewayStreamingCountsTokens(t *testing.T) {
 	g := newTestGateway(t)
 	// The app didn't ask for usage: Berth asks for it, counts it, and keeps

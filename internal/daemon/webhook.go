@@ -12,6 +12,7 @@ import (
 
 	"github.com/dps/berth/internal/github"
 	"github.com/dps/berth/internal/state"
+	"github.com/dps/berth/internal/tunnel"
 )
 
 const (
@@ -26,6 +27,8 @@ const (
 func (d *Daemon) webhookHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /github/{app}", d.handleGitHub)
+	mux.HandleFunc("GET "+tunnel.MarketplacePath, d.handleMarketplaceChallenge)
+	mux.HandleFunc("POST "+tunnel.MarketplacePath, d.handleMarketplaceNotice)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") })
 	return mux
 }

@@ -21,6 +21,19 @@ type AIConfig struct {
 	// LocalParallel caps concurrent requests to local models; the rest
 	// queue (default 2).
 	LocalParallel int `json:"local_parallel,omitempty"`
+	// MLX, when set, runs a model on the GPU with its neurons open to
+	// apps (berth ai:mlx), as provider "mlx".
+	MLX *AIMLX `json:"mlx,omitempty"`
+}
+
+type AIMLX struct {
+	Model string `json:"model"`          // a Hugging Face repo in MLX format
+	Addr  string `json:"addr,omitempty"` // where the worker listens (default 127.0.0.1:7786)
+	// IdleSeconds unloads the model after this long unused (default 900),
+	// since it holds several GB of memory.
+	IdleSeconds int `json:"idle_seconds,omitempty"`
+	// Worker runs this script in place of the built-in one, for working on it.
+	Worker string `json:"worker,omitempty"`
 }
 
 type AIProvider struct {

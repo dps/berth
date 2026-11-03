@@ -1052,6 +1052,40 @@ what's loaded, counts it, and warns when apps, databases and the model
 together get close to the Mac's RAM. On an 8 GB Mac, use a cloud provider (or
 a really small model).
 
+### Looking inside a model
+
+Ollama only answers. `berth ai:mlx` runs a second local model, with
+[MLX](https://github.com/ml-explore/mlx) on the GPU, whose insides apps can
+read and change: Qwen3 8B in 4 bits unless you name another MLX model
+(`berth ai:mlx mlx-community/Qwen3-4B-4bit`). It sets up its own Python with
+[uv](https://docs.astral.sh/uv) (offering `brew install uv`), downloads the
+model once (about 5 GB) and runs it as `mlx/Qwen3-8B-4bit`, through the same
+gateway, token and limits as any model. It loads on first use and lets go of
+its memory after 15 idle minutes.
+
+Two things only this model does:
+
+```bash
+# Which MLP neuron fires for a concept, and not for related ones?
+curl "$OPENAI_BASE_URL/interp/contrast" -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"model":"mlx/Qwen3-8B-4bit","target":"San Francisco","others":["Oakland","Seattle","Paris","..."]}'
+
+# Chat with a concept turned up. A steer entry adds the concept's direction
+# (its activations less its neighbours') to one layer, or pins one neuron.
+curl "$OPENAI_BASE_URL/chat/completions" -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"model":"mlx/Qwen3-8B-4bit","messages":[{"role":"user","content":"Plan my weekend"}],
+       "steer":[{"layer":12,"target":"San Francisco","others":["Oakland","..."],"scale":3}],
+       "frequency_penalty":1}'
+```
+
+The contrast answers with the best neurons, each with its layer, index,
+score and how hard it fired for every concept. A steer entry is either
+`{layer, target, others, scale}` or `{layer, neuron, value}`. Directions
+steer well around a third of the way through the model, at a scale of 2 to
+3; past that the model tends to say only the concept. One neuron, even the
+one that best picks the concept out, rarely changes what the model says
+before it breaks it.
+
 The gateway listens on port 7790 on the containers' network, and only
 containers on this Mac can reach it. To change the port, set `ai_port` in
 `~/.berth/config.json` and run `berth reload`. To use Ollama on another
@@ -1104,6 +1138,12 @@ Apps name the tool, not the vendor, so you can change provider without touching
 them. `berth tools:use web.search serpapi,exa` takes effect on the next call,
 and the second provider takes over if the first fails. Open-Meteo is free for
 non-commercial use; add a `weatherapi` key for anything else.
+
+eBay keeps a production keyset disabled until it has an endpoint for marketplace
+account deletion notices. `berth tools:ebay-deletion` turns one on and prints the
+URL and verification token to paste into eBay's Alerts & Notifications page.
+Berth keeps no eBay user data, so it only acknowledges the notices: an app that
+stores eBay usernames has to handle those deletions itself.
 
 `berth tools:docs myapp` prints the tools with their arguments as Markdown for
 a coding agent, `GET $BERTH_TOOLS_URL/v1/openapi.json` generates a client in

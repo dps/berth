@@ -19,6 +19,32 @@ const Local = "local"
 // otherwise.
 const DefaultOllamaURL = "http://127.0.0.1:11434"
 
+// MLX is the provider name for the model berthd's MLX worker serves, whose
+// neurons apps can read and pin (berth ai:mlx).
+const MLX = "mlx"
+
+// DefaultMLXAddr is where the MLX worker listens unless ai/config.json
+// says otherwise.
+const DefaultMLXAddr = "127.0.0.1:7786"
+
+// MLXName is the short name of the MLX worker's model, as apps ask for it
+// after mlx/.
+func MLXName(cfg *state.AIConfig) string {
+	_, name, _ := strings.Cut(cfg.MLX.Model, "/")
+	if name == "" {
+		name = cfg.MLX.Model
+	}
+	return name
+}
+
+// MLXAddr is where the MLX worker listens.
+func MLXAddr(cfg *state.AIConfig) string {
+	if cfg.MLX != nil && cfg.MLX.Addr != "" {
+		return cfg.MLX.Addr
+	}
+	return DefaultMLXAddr
+}
+
 // Builtin are the cloud providers Berth knows, by their OpenAI-compatible
 // base URLs. Others can be added with `berth ai:key <name> --url`.
 var Builtin = map[string]string{
@@ -63,14 +89,27 @@ func Resolve(cfg *state.AIConfig, name string) (Target, error) {
 		}
 		return Target{}, fmt.Errorf("unknown model %q: use an alias or provider/model (%s)", name, hint)
 	}
+	if provider == MLX {
+		// One model at a time: whatever follows mlx/ names it for usage.
+		if cfg.MLX == nil {
+			return Target{}, fmt.Errorf("%q needs the MLX worker, which is off (berth ai:mlx)", name)
+		}
+		return Target{Provider: provider, Model: model}, nil
+	}
 	if provider != Local && Builtin[provider] == "" && cfg.Providers[provider].URL == "" {
 		return Target{}, fmt.Errorf("unknown provider %q in model %q", provider, name)
 	}
 	return Target{Provider: provider, Model: model}, nil
 }
 
+// Keyless reports whether a provider runs on this Mac and needs no key.
+func Keyless(provider string) bool { return provider == Local || provider == MLX }
+
 // BaseURL is the OpenAI-compatible base for a provider.
 func BaseURL(cfg *state.AIConfig, provider string) string {
+	if provider == MLX {
+		return "http://" + MLXAddr(cfg) + "/v1"
+	}
 	if provider == Local {
 		u := cfg.OllamaURL
 		if u == "" {

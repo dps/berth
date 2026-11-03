@@ -125,6 +125,24 @@ func cmdToolsKey() *cobra.Command {
 	return c
 }
 
+func cmdToolsEbayDeletion() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tools:ebay-deletion",
+		Short: "Turn on the endpoint eBay needs before it enables a production keyset",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var e daemon.MarketplaceEndpoint
+			if err := call("tools.marketplace", nil, &e); err != nil {
+				return err
+			}
+			fmt.Println("On eBay's Alerts & Notifications page, under Marketplace Account Deletion:")
+			fmt.Printf("  Endpoint            %s\n", e.URL)
+			fmt.Printf("  Verification token  %s\n", e.Token)
+			return nil
+		},
+	}
+}
+
 func cmdToolsUse() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tools:use <tool> [provider,provider...]",

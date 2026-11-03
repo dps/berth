@@ -323,6 +323,43 @@ func cmdAIKey() *cobra.Command {
 	return c
 }
 
+func cmdAIMLX() *cobra.Command {
+	var off, yes bool
+	c := &cobra.Command{
+		Use:   "ai:mlx [hugging-face-model]",
+		Short: "Run a model on the GPU with its neurons open to apps: provider mlx, /v1/interp/contrast and steering",
+		Long: "Sets up MLX (a Python environment in ~/.berth/ai/mlx), downloads the model once, and runs it\n" +
+			"for apps as mlx/<name>. Unlike Ollama's models, apps can find the neurons that fire for a\n" +
+			"concept (POST /v1/interp/contrast) and pin neurons while the model writes (\"steer\" in a\n" +
+			"chat request). The model loads on first use and unloads after 15 idle minutes.",
+		Example: "  berth ai:mlx                                   # Qwen3 8B, 4-bit (about 5 GB)\n" +
+			"  berth ai:mlx mlx-community/Qwen3-4B-4bit       # smaller, for Macs with less memory\n" +
+			"  berth ai:mlx --off",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := daemon.AIMLXParams{Off: off}
+			if len(args) == 1 {
+				p.Model = args[0]
+			}
+			if !off {
+				// uv brings its own Python, so a broken or missing system one doesn't matter.
+				if _, err := exec.LookPath(runtime.LookBin("uv")); err != nil {
+					if !yes && !confirm("MLX is a Python library; Berth sets it up with uv, which brings its own Python. Install uv with Homebrew (brew install uv)?") {
+						return fmt.Errorf("install uv (brew install uv, or https://docs.astral.sh/uv), then run berth ai:mlx again")
+					}
+					if err := run(runtime.LookBin("brew"), "install", "uv"); err != nil {
+						return err
+					}
+				}
+			}
+			return call("ai.mlx", p, nil)
+		},
+	}
+	c.Flags().BoolVar(&off, "off", false, "stop the worker")
+	c.Flags().BoolVarP(&yes, "yes", "y", false, "install uv without asking")
+	return c
+}
+
 func cmdAIAlias() *cobra.Command {
 	var remove bool
 	c := &cobra.Command{
