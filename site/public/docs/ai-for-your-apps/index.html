@@ -192,6 +192,11 @@ curl &quot;$OPENAI_BASE_URL/chat/completions&quot; -H &quot;Authorization: Beare
        &quot;steer&quot;:[{&quot;layer&quot;:12,&quot;target&quot;:&quot;San Francisco&quot;,&quot;others&quot;:[&quot;Oakland&quot;,&quot;...&quot;],&quot;scale&quot;:3}],
        &quot;frequency_penalty&quot;:1}'
 </code></pre>
+<p><code>POST $OPENAI_BASE_URL/interp/trace</code> runs text (or <code>messages</code>) through once
+and answers token by token: the <code>neurons</code> you name, how close each token's
+residual stream is to a concept's direction (<code>directions</code>, as cosines), and
+with <code>top</code> set, each layer's strongest neurons. It takes <code>steer</code> too, to see
+what a steered model sees.</p>
 <p>The contrast answers with the best neurons, each with its layer, index,
 score and how hard it fired for every concept. A steer entry is either
 <code>{layer, target, others, scale}</code> or <code>{layer, neuron, value}</code>. Directions

@@ -1078,6 +1078,12 @@ curl "$OPENAI_BASE_URL/chat/completions" -H "Authorization: Bearer $OPENAI_API_K
        "frequency_penalty":1}'
 ```
 
+`POST $OPENAI_BASE_URL/interp/trace` runs text (or `messages`) through once
+and answers token by token: the `neurons` you name, how close each token's
+residual stream is to a concept's direction (`directions`, as cosines), and
+with `top` set, each layer's strongest neurons. It takes `steer` too, to see
+what a steered model sees.
+
 The contrast answers with the best neurons, each with its layer, index,
 score and how hard it fired for every concept. A steer entry is either
 `{layer, target, others, scale}` or `{layer, neuron, value}`. Directions

@@ -103,13 +103,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		g.models(w, r)
-	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/v1/interp/contrast"):
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/v1/interp/contrast" || r.URL.Path == "/v1/interp/trace"):
 		g.proxy(w, r, false)
 	case r.Method == http.MethodPost && (r.URL.Path == "/anthropic/v1/messages" || r.URL.Path == "/anthropic/v1/messages/count_tokens"):
 		g.proxy(w, r, true)
 	default:
 		apiError(w, strings.HasPrefix(r.URL.Path, "/anthropic/"), http.StatusNotFound, "not_found_error",
-			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models, /v1/interp/contrast and /anthropic/v1/messages")
+			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models, /v1/interp/contrast, /v1/interp/trace and /anthropic/v1/messages")
 	}
 }
 
