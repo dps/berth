@@ -8,8 +8,16 @@
 #                               not for related ones
 #   POST /v1/interp/trace       token by token: chosen neurons, how much of a
 #                               concept's direction each token carries, each
-#                               layer's strongest neurons, and with "map",
-#                               every neuron in the model as one byte
+#                               layer's strongest neurons; with "map", every
+#                               neuron in the model as one byte; with "lens",
+#                               what each layer would predict; with
+#                               "attention", where one layer's heads looked
+#   POST /v1/interp/scan        many texts at once: where chosen neurons fire
+#                               hardest, for a page of examples per neuron
+#   POST /v1/interp/patch       causal tracing: copy one layer's activations at
+#                               one token from a clean prompt into a corrupted
+#                               one, for every layer and token, and see how
+#                               much of the clean answer comes back
 #   GET  /v1/models, /healthz
 #
 # Neurons are the MLP's hidden units: silu(gate(x)) * up(x), the input to
@@ -47,6 +55,10 @@ MAX_TOKENS = 2048
 MAX_CONCEPTS = 120
 MAX_CONCEPT_CHARS = 200
 MAX_TRACE_TOKENS = 512
+MAX_SCAN_TEXTS = 512
+MAX_SCAN_TOKENS = 64
+SCAN_BATCH = 16
+MAX_PATCH_TOKENS = 64
 MAP_BYTES = 2_000_000  # the whole-model map for every token is pooled to fit
 TEMPLATE = "Let me tell you about {}"
 SKIP_EDGE_LAYERS = 2  # the first and last layers are about tokens, not ideas
@@ -69,16 +81,17 @@ class Probe(nn.Module):
 
     def __call__(self, x):
         pin = hooks.pins.get(self.layer)
-        if hooks.record is None and pin is None:
-            return self.inner(x)
+        record = hooks.record is not None and (hooks.record_only is None or self.layer in hooks.record_only)
+        if not record and pin is None:
+            return patched(self.inner(x), "mlp", self.layer)
         m = self.inner
         h = nn.silu(m.gate_proj(x)) * m.up_proj(x)
-        if hooks.record is not None:
+        if record:
             hooks.record[self.layer] = h
         if pin is not None:
             keep, value = pin
             h = h * keep.astype(h.dtype) + value.astype(h.dtype)
-        return m.down_proj(h)
+        return patched(m.down_proj(h), "mlp", self.layer)
 
 
 class Stream(nn.Module):
@@ -92,20 +105,72 @@ class Stream(nn.Module):
 
     def __call__(self, x, *args, **kwargs):
         out = self.inner(x, *args, **kwargs)
-        if hooks.streams is not None:
-            hooks.streams[self.layer] = out
         push = hooks.pushes.get(self.layer)
         if push is not None:
             out = out + push.astype(out.dtype)
+        out = patched(out, "stream", self.layer)
+        if hooks.streams is not None:
+            hooks.streams[self.layer] = out
         return out
+
+
+class Eyes(nn.Module):
+    """Wraps one layer's attention to record where each token looked, and
+    to patch its output."""
+
+    def __init__(self, attn, layer):
+        super().__init__()
+        self.inner = attn
+        self.layer = layer
+
+    def __call__(self, x, mask=None, cache=None):
+        if hooks.look == self.layer:
+            hooks.looked = attention_pattern(self.inner, x)
+        return patched(self.inner(x, mask, cache), "attn", self.layer)
+
+
+def attention_pattern(a, x):
+    """Recomputes the softmax the fused attention kernel keeps to itself:
+    batch × heads × query × key."""
+    if not all(hasattr(a, n) for n in ("q_proj", "k_proj", "rope", "n_heads", "n_kv_heads", "scale")):
+        raise BadRequest(f"{NAME}'s attention isn't laid out the way this worker reads it")
+    B, T, _ = x.shape
+    q = a.q_proj(x).reshape(B, T, a.n_heads, -1)
+    k = a.k_proj(x).reshape(B, T, a.n_kv_heads, -1)
+    if hasattr(a, "q_norm"):
+        q, k = a.q_norm(q), a.k_norm(k)
+    q, k = a.rope(q.transpose(0, 2, 1, 3)), a.rope(k.transpose(0, 2, 1, 3))
+    k = mx.repeat(k, a.n_heads // a.n_kv_heads, axis=1)
+    s = ((q * a.scale) @ k.transpose(0, 1, 3, 2)).astype(mx.float32)
+    future = mx.triu(mx.ones((T, T), dtype=mx.bool_), k=1)
+    return mx.softmax(mx.where(future, -mx.inf, s), axis=-1)
+
+
+def patched(out, site, layer):
+    """Records a site's output for patching, or swaps in recorded values
+    where the patch's mask says."""
+    if hooks.capture is None and not hooks.patch:
+        return out
+    if hooks.capture is not None:
+        hooks.capture[(site, layer)] = out
+    p = hooks.patch.get((site, layer))
+    if p is not None:
+        mask, values = p
+        out = mx.where(mask, values.astype(out.dtype), out)
+    return out
 
 
 class Hooks:
     def __init__(self):
         self.record = None  # layer → MLP neurons in the last forward pass
+        self.record_only = None  # the layers to record, if not all
         self.streams = None  # layer → residual stream in the last forward pass
         self.pins = {}  # layer → (keep mask, values) over the MLP neurons
         self.pushes = {}  # layer → vector added to the residual stream
+        self.look = None  # the layer whose attention pattern to record
+        self.looked = None  # and the pattern
+        self.capture = None  # (site, layer) → output, for patching
+        self.patch = {}  # (site, layer) → (mask, values) swapped into that output
 
 
 hooks = Hooks()
@@ -124,6 +189,7 @@ def ensure_loaded():
     layers = list(model.model.layers)
     for i, layer in enumerate(layers):
         layer.mlp = Probe(layer.mlp, i)
+        layer.self_attn = Eyes(layer.self_attn, i)
         model.model.layers[i] = Stream(layer, i)
     width = layers[0].mlp.inner.up_proj.weight.shape[0]  # quantized weights pack the input side, not this one
     log(f"loaded {MODEL} in {time.time() - t0:.1f}s: {len(layers)} layers × {width} neurons")
@@ -132,10 +198,33 @@ def ensure_loaded():
 def unload():
     global model, tokenizer, layers
     model = tokenizer = None
+    token_text.clear()
+    directions.clear()
     layers = []
     gc.collect()
     mx.clear_cache()
     log("unloaded after", int(IDLE), "idle seconds")
+
+
+def head(h):
+    """Logits from the final norm's output."""
+    lm = getattr(model, "lm_head", None)
+    return lm(h) if lm is not None else model.model.embed_tokens.as_linear(h)
+
+
+def last_logits(ids):
+    """The next-token logits at the last position of each row: the model
+    without its head on every other position."""
+    return head(model.model(ids)[:, -1]).astype(mx.float32)
+
+
+token_text = {}
+
+
+def decoded(i):
+    if i not in token_text:
+        token_text[i] = tokenizer.decode([i])
+    return token_text[i]
 
 
 def set_pins(steer):
@@ -327,6 +416,11 @@ def trace(job):
     neurons = req.get("neurons") or []
     dirs = req.get("directions") or []
     k = max(0, min(int(req.get("top") or 0), 8))
+    lens = max(0, min(int(req.get("lens") or 0), 5))
+    look = req.get("attention")
+    if look is not None:
+        if not isinstance(look, dict) or not 0 <= int(look.get("layer", -1)) < len(layers):
+            raise BadRequest(f"attention is {{layer, head}}, with layer below {len(layers)}")
     if len(neurons) > 16 or len(dirs) > 4:
         raise BadRequest("at most 16 neurons and 4 directions")
     for n in neurons:
@@ -342,6 +436,7 @@ def trace(job):
         vecs.append((d, layer, direction(d.get("target"), d.get("others"))[layer]))
     set_pins(req.get("steer"))  # trace what a steered model sees, if asked
     hooks.record, hooks.streams = {}, {}
+    hooks.look = int(look["layer"]) if look is not None else None
     try:
         t0 = time.time()
         model(mx.array(ids)[None])
@@ -358,6 +453,10 @@ def trace(job):
             out["directions"].append({"layer": layer, "target": d.get("target"), "values": [round(x, 4) for x in cos.tolist()]})
         if req.get("map") or req.get("map_token") is not None:
             out.update(neuron_map(len(ids), req.get("map_token")))
+        if lens:
+            out["lens"] = logit_lens(lens)
+        if look is not None:
+            out["attention"] = attention_of(look)
         if k:
             top = []
             for layer in range(len(layers)):
@@ -374,6 +473,38 @@ def trace(job):
     finally:
         hooks.record, hooks.streams = None, None
         hooks.pins, hooks.pushes = {}, {}
+        hooks.look, hooks.looked = None, None
+
+
+def logit_lens(k):
+    """What the model would say next if each layer were its last: every
+    layer's residual stream through the final norm and the head.
+    lens[layer][token] = [[text, probability], ...], likeliest first."""
+    rows = []
+    for layer in range(len(layers)):
+        p = mx.softmax(head(model.model.norm(hooks.streams[layer][0])).astype(mx.float32), axis=-1)
+        idx = mx.argpartition(-p, kth=k - 1, axis=-1)[:, :k]
+        val = mx.take_along_axis(p, idx, axis=-1)
+        order = mx.argsort(-val, axis=-1)
+        idx, val = mx.take_along_axis(idx, order, axis=-1), mx.take_along_axis(val, order, axis=-1)
+        rows.append([[[decoded(i), round(v, 4)] for i, v in zip(ri, rv)] for ri, rv in zip(idx.tolist(), val.tolist())])
+    return rows
+
+
+def attention_of(look):
+    """One layer's attention, one head or the heads' mean, as bytes:
+    row q is where token q looked, 255 being all of its attention."""
+    a = hooks.looked[0]  # heads × T × T
+    h = look.get("head")
+    if h is None or int(h) < 0:
+        a, h = a.mean(axis=0), -1
+    elif int(h) < a.shape[0]:
+        a, h = a[int(h)], int(h)
+    else:
+        raise BadRequest(f"no head {h}: layer {look['layer']} has {a.shape[0]}")
+    q = mx.clip(mx.round(a * 255), 0, 255).astype(mx.uint8)
+    return {"layer": int(look["layer"]), "head": h, "heads": hooks.looked.shape[1], "shape": list(q.shape),
+            "data": base64.b64encode(np.array(q).tobytes()).decode()}
 
 
 def neuron_map(n_tokens, token=None):
@@ -381,11 +512,15 @@ def neuron_map(n_tokens, token=None):
     drawing. Each layer is scaled to its own typical activity, since later
     layers fire far harder. For all tokens, neighbouring neurons are pooled
     (their strongest) to keep the answer under MAP_BYTES; for one token,
-    every neuron is there."""
+    every neuron is there; "max" gives every neuron's peak over the text."""
     h = mx.abs(mx.stack([hooks.record[i][0] for i in range(len(layers))]).astype(mx.float32))  # layers × tokens × neurons
     scale = h.mean(axis=(1, 2), keepdims=True) * 12 + 1e-6
     q = mx.clip(h / scale * 255, 0, 255)
     out = {"map_scale": [round(x, 4) for x in scale.reshape(-1).tolist()]}
+    if token == "max":  # each neuron at its strongest anywhere in the text
+        one = q.max(axis=1).astype(mx.uint8)
+        out["map_token"] = {"token": "max", "shape": [len(layers), width], "data": base64.b64encode(np.array(one).tobytes()).decode()}
+        return out
     if token is not None:
         t = int(token)
         if not 0 <= t < n_tokens:
@@ -399,6 +534,137 @@ def neuron_map(n_tokens, token=None):
     pooled = q.reshape(len(layers), n_tokens, width // pool, pool).max(axis=-1).transpose(1, 0, 2).astype(mx.uint8)
     out["map"] = {"shape": [n_tokens, len(layers), width // pool], "pool": pool, "data": base64.b64encode(np.array(pooled).tobytes()).decode()}
     return out
+
+
+def neurons_of(v, most=16):
+    if not isinstance(v, list) or not 1 <= len(v) <= most:
+        raise BadRequest(f"neurons is a list of 1 to {most} {{layer, neuron}}")
+    out = []
+    for n in v:
+        layer, neuron = int(n.get("layer", -1)), int(n.get("neuron", -1))
+        if not (0 <= layer < len(layers) and 0 <= neuron < width):
+            raise BadRequest(f"no neuron {n.get('layer')}/{n.get('neuron')}")
+        out.append((layer, neuron))
+    return out
+
+
+def scan(job):
+    """Runs many short texts through the model, a batch at a time, and
+    keeps where each chosen neuron fired hardest. Rows are padded on the
+    right, which the causal mask keeps from touching the real tokens."""
+    req = job.body
+    texts = req.get("texts")
+    if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_SCAN_TEXTS:
+        raise BadRequest(f"texts is a list of 1 to {MAX_SCAN_TEXTS} strings")
+    neurons = neurons_of(req.get("neurons"))
+    top = max(1, min(int(req.get("top") or 12), 50))
+    ids = [tokenizer.encode(str(t)[:2000])[:MAX_SCAN_TOKENS] for t in texts]
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    order = sorted((i for i in range(len(ids)) if ids[i]), key=lambda i: len(ids[i]))
+    values = {}  # text → neurons × tokens
+    t0 = time.time()
+    hooks.record, hooks.record_only = {}, {layer for layer, _ in neurons}
+    try:
+        for b in range(0, len(order), SCAN_BATCH):
+            if job.cancelled:
+                return
+            rows = order[b:b + SCAN_BATCH]
+            n = max(len(ids[i]) for i in rows)
+            x = mx.array([ids[i] + [pad] * (n - len(ids[i])) for i in rows])
+            hooks.record.clear()
+            model.model(x)  # lazy: only what the neurons need is computed
+            v = mx.stack([hooks.record[layer][:, :, neuron] for layer, neuron in neurons], axis=1).astype(mx.float32)
+            for r, i in enumerate(rows):
+                values[i] = np.array(v[r, :, :len(ids[i])])
+            job.out.put(("progress", len(values)))
+    finally:
+        hooks.record, hooks.record_only = None, None
+    out = []
+    for j, (layer, neuron) in enumerate(neurons):
+        peaks = sorted(((values[i][j].max(), i) for i in values), reverse=True)
+        out.append({"layer": layer, "neuron": neuron,
+                    "max": [round(float(values[i][j].max()), 3) if i in values else None for i in range(len(ids))],
+                    "examples": [{"text": i, "peak": round(float(p), 3), "at": int(values[i][j].argmax()),
+                                  "tokens": [decoded(t) for t in ids[i]],
+                                  "values": [round(float(x), 3) for x in values[i][j]]} for p, i in peaks[:top]]})
+    tokens = sum(len(i) for i in ids)
+    job.out.put(("result", {"object": "interp.scan", "model": NAME, "neurons": out,
+                            "usage": {"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens},
+                            "seconds": round(time.time() - t0, 2)}))
+
+
+SITES = ("stream", "mlp", "attn")
+
+
+def patch(job):
+    """Causal tracing. The clean prompt gets an answer; the corrupted one,
+    the same length with the subject changed, a different one. Then for
+    each layer and token, the corrupted prompt runs again with just that
+    one activation copied from the clean run: where that brings the clean
+    answer back is where the model holds what it needed."""
+    req = job.body
+    site = req.get("site") or "stream"
+    if site not in SITES:
+        raise BadRequest(f"site is one of {', '.join(SITES)}")
+    clean = str(req.get("clean") or "")
+    ids = tokenizer.encode(clean)
+    if not 2 <= len(ids) <= MAX_PATCH_TOKENS:
+        raise BadRequest(f"clean is 2 to {MAX_PATCH_TOKENS} tokens; it's {len(ids)}")
+    tries = req.get("corrupt")
+    tries = [tries] if isinstance(tries, str) else tries
+    if not isinstance(tries, list) or not tries or len(tries) > 100:
+        raise BadRequest("corrupt is a prompt, or a list of up to 100 to try in turn")
+    lengths = {}
+    for c in tries:
+        cids = tokenizer.encode(str(c))
+        lengths[str(c)] = len(cids)
+        if len(cids) == len(ids) and cids != ids:
+            corrupt = str(c)
+            break
+    else:
+        raise BadRequest(f"the corrupted prompt must have as many tokens as the clean one ({len(ids)}); "
+                         + ", ".join(f"{c!r} has {n}" for c, n in list(lengths.items())[:5]))
+    t0 = time.time()
+    T = len(ids)
+    hooks.capture = {}
+    try:
+        p_clean = mx.softmax(last_logits(mx.array(ids)[None])[0])
+        saved = {layer: hooks.capture[(site, layer)] for layer in range(len(layers))}
+        mx.eval(p_clean, saved)
+    finally:
+        hooks.capture = None
+    if req.get("answer"):
+        a = tokenizer.encode(str(req["answer"]))
+        if not a:
+            raise BadRequest("answer has no tokens")
+        answer = a[0]
+    else:
+        answer = int(mx.argmax(p_clean).item())
+    p_bad = mx.softmax(last_logits(mx.array(cids)[None])[0])
+    bad = int(mx.argmax(p_bad).item())
+    # One row per token, each with the clean activation at that token only.
+    x = mx.array([cids] * T)
+    mask = mx.eye(T, dtype=mx.bool_)[:, :, None]
+    grid = []
+    try:
+        for layer in range(len(layers)):
+            if job.cancelled:
+                return
+            hooks.patch = {(site, layer): (mask, mx.broadcast_to(saved[layer], (T, T, saved[layer].shape[-1])))}
+            p = mx.softmax(last_logits(x), axis=-1)[:, answer]
+            grid.append([round(v, 4) for v in p.tolist()])
+            job.out.put(("progress", layer + 1))
+    finally:
+        hooks.patch = {}
+    job.out.put(("result", {
+        "object": "interp.patch", "model": NAME, "site": site, "clean": clean, "corrupt": corrupt,
+        "tokens": [decoded(i) for i in ids], "corrupt_tokens": [decoded(i) for i in cids],
+        "answer": {"token": decoded(answer), "clean": round(p_clean[answer].item(), 4), "corrupt": round(p_bad[answer].item(), 4)},
+        "corrupt_answer": {"token": decoded(bad), "p": round(p_bad[bad].item(), 4)},
+        "grid": grid,  # grid[layer][token]: the clean answer's probability with that one patch
+        "usage": {"prompt_tokens": T * (len(layers) + 2), "completion_tokens": 0, "total_tokens": T * (len(layers) + 2)},
+        "seconds": round(time.time() - t0, 2),
+    }))
 
 
 class Job:
@@ -422,7 +688,7 @@ def model_thread():
             continue
         try:
             ensure_loaded()
-            {"chat": chat, "contrast": contrast, "trace": trace}[job.kind](job)
+            {"chat": chat, "contrast": contrast, "trace": trace, "scan": scan, "patch": patch}[job.kind](job)
         except BadRequest as e:
             job.out.put(("error", (400, str(e))))
         except Exception as e:  # keep serving; the app sees why
@@ -469,12 +735,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(400, "request body is not a JSON object")
         if self.path == "/v1/chat/completions":
             job = Job("chat", body)
-        elif self.path == "/v1/interp/contrast":
-            job = Job("contrast", body)
-        elif self.path == "/v1/interp/trace":
-            job = Job("trace", body)
+        elif self.path.startswith("/v1/interp/") and self.path[11:] in ("contrast", "trace", "scan", "patch"):
+            job = Job(self.path[11:], body)
         else:
-            return self.error(404, "this worker serves /v1/chat/completions, /v1/interp/contrast and /v1/interp/trace")
+            return self.error(404, "this worker serves /v1/chat/completions and /v1/interp/{contrast,trace,scan,patch}")
         jobs.put(job)
         try:
             if job.kind == "chat" and body.get("stream"):

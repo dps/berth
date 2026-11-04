@@ -184,6 +184,10 @@ func TestGatewayMLX(t *testing.T) {
 	if s := g.up.last(); s.Path != "/v1/interp/trace" || s.Body["text"] != "San Francisco" {
 		t.Fatalf("worker saw %+v", s)
 	}
+	g.do(t, "web", "/v1/interp/patch", `{"model":"mlx/Qwen3-8B-4bit","clean":"a b","corrupt":"c d"}`, nil)
+	if s := g.up.last(); s.Path != "/v1/interp/patch" || s.Body["clean"] != "a b" {
+		t.Fatalf("patch upstream: %+v", s)
+	}
 	// The allow list applies: dev may only use local/*.
 	if resp, _ := g.do(t, "dev", "/v1/interp/contrast", `{"model":"mlx/Qwen3-8B-4bit"}`, nil); resp.StatusCode != 403 {
 		t.Fatalf("dev: %d", resp.StatusCode)

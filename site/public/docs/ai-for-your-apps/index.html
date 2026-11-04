@@ -196,7 +196,28 @@ curl &quot;$OPENAI_BASE_URL/chat/completions&quot; -H &quot;Authorization: Beare
 and answers token by token: the <code>neurons</code> you name, how close each token's
 residual stream is to a concept's direction (<code>directions</code>, as cosines), and
 with <code>top</code> set, each layer's strongest neurons. It takes <code>steer</code> too, to see
-what a steered model sees.</p>
+what a steered model sees. More, when asked:</p>
+<ul>
+<li><code>&quot;map&quot;: true</code>: every neuron in the model as one byte per token, pooled to
+fit; <code>&quot;map_token&quot;: 5</code> for every neuron at one token, or <code>&quot;max&quot;</code> for each
+neuron's peak over the text.</li>
+<li><code>&quot;lens&quot;: 3</code>: the logit lens, each layer's residual stream read through the
+final norm and output head, as the three likeliest next tokens per token.</li>
+<li><code>&quot;attention&quot;: {&quot;layer&quot;: 12, &quot;head&quot;: 3}</code>: where each token looked in that
+layer, as bytes (<code>head</code> -1 averages the heads).</li>
+</ul>
+<p>Two more routes:</p>
+<ul>
+<li><code>POST $OPENAI_BASE_URL/interp/scan</code> with <code>texts</code> (up to 512) and <code>neurons</code>
+runs them all in batches and returns each neuron's strongest examples,
+token by token: a page of what a neuron is for.</li>
+<li><code>POST $OPENAI_BASE_URL/interp/patch</code> does causal tracing. Give it a <code>clean</code>
+prompt (&quot;The Eiffel Tower is in the city of&quot;) and a <code>corrupt</code> one with the
+subject swapped, the same number of tokens long (or a list to try in turn),
+and a <code>site</code> (<code>stream</code>, <code>mlp</code> or <code>attn</code>). It reruns the corrupted prompt
+once per layer and token with just that activation copied from the clean
+run, and answers with the clean answer's probability for each.</li>
+</ul>
 <p>The contrast answers with the best neurons, each with its layer, index,
 score and how hard it fired for every concept. A steer entry is either
 <code>{layer, target, others, scale}</code> or <code>{layer, neuron, value}</code>. Directions

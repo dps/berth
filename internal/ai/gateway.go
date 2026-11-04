@@ -97,19 +97,22 @@ func (g *Gateway) snapshot() (*state.AIConfig, map[string]string, chan struct{})
 	return g.cfg, g.keys, g.local
 }
 
+// interpPaths are the MLX worker's ways of looking inside its model.
+var interpPaths = map[string]bool{"/v1/interp/contrast": true, "/v1/interp/trace": true, "/v1/interp/scan": true, "/v1/interp/patch": true}
+
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/healthz":
 		io.WriteString(w, "ok\n")
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		g.models(w, r)
-	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/v1/interp/contrast" || r.URL.Path == "/v1/interp/trace"):
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/completions" || r.URL.Path == "/v1/embeddings" || interpPaths[r.URL.Path]):
 		g.proxy(w, r, false)
 	case r.Method == http.MethodPost && (r.URL.Path == "/anthropic/v1/messages" || r.URL.Path == "/anthropic/v1/messages/count_tokens"):
 		g.proxy(w, r, true)
 	default:
 		apiError(w, strings.HasPrefix(r.URL.Path, "/anthropic/"), http.StatusNotFound, "not_found_error",
-			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models, /v1/interp/contrast, /v1/interp/trace and /anthropic/v1/messages")
+			"the Berth AI gateway serves /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models, /v1/interp/{contrast,trace,scan,patch} and /anthropic/v1/messages")
 	}
 }
 

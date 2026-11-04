@@ -1082,7 +1082,27 @@ curl "$OPENAI_BASE_URL/chat/completions" -H "Authorization: Bearer $OPENAI_API_K
 and answers token by token: the `neurons` you name, how close each token's
 residual stream is to a concept's direction (`directions`, as cosines), and
 with `top` set, each layer's strongest neurons. It takes `steer` too, to see
-what a steered model sees.
+what a steered model sees. More, when asked:
+
+- `"map": true`: every neuron in the model as one byte per token, pooled to
+  fit; `"map_token": 5` for every neuron at one token, or `"max"` for each
+  neuron's peak over the text.
+- `"lens": 3`: the logit lens, each layer's residual stream read through the
+  final norm and output head, as the three likeliest next tokens per token.
+- `"attention": {"layer": 12, "head": 3}`: where each token looked in that
+  layer, as bytes (`head` -1 averages the heads).
+
+Two more routes:
+
+- `POST $OPENAI_BASE_URL/interp/scan` with `texts` (up to 512) and `neurons`
+  runs them all in batches and returns each neuron's strongest examples,
+  token by token: a page of what a neuron is for.
+- `POST $OPENAI_BASE_URL/interp/patch` does causal tracing. Give it a `clean`
+  prompt ("The Eiffel Tower is in the city of") and a `corrupt` one with the
+  subject swapped, the same number of tokens long (or a list to try in turn),
+  and a `site` (`stream`, `mlp` or `attn`). It reruns the corrupted prompt
+  once per layer and token with just that activation copied from the clean
+  run, and answers with the clean answer's probability for each.
 
 The contrast answers with the best neurons, each with its layer, index,
 score and how hard it fired for every concept. A steer entry is either
