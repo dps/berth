@@ -5,7 +5,8 @@
 #   POST /v1/chat/completions   OpenAI-compatible, plus "steer": pin MLP
 #                               neurons to a value while the model writes
 #   POST /v1/interp/contrast    which MLP neuron fires for one concept and
-#                               not for related ones
+#                               not for related ones, at a chosen depth, and
+#                               what each one writes to the next token
 #   POST /v1/interp/trace       token by token: chosen neurons, how much of a
 #                               concept's direction each token carries, each
 #                               layer's strongest neurons; with "map", every
@@ -62,6 +63,7 @@ MAX_PATCH_TOKENS = 64
 MAP_BYTES = 2_000_000  # the whole-model map for every token is pooled to fit
 TEMPLATE = "Let me tell you about {}"
 SKIP_EDGE_LAYERS = 2  # the first and last layers are about tokens, not ideas
+WRITER_Z = 8  # a neuron whose top word stands this far out writes it
 
 
 def log(*a):
@@ -212,6 +214,28 @@ def head(h):
     return lm(h) if lm is not None else model.model.embed_tokens.as_linear(h)
 
 
+def writes(pairs, k=6):
+    """What each neuron says straight to the next token when it fires: its
+    down_proj column through the final norm and the head. Gives the words
+    it raises most, and how far the top one stands out from the rest of
+    the vocabulary, in standard deviations. Most neurons' top word stands
+    about 5 out, which is noise; a writer's stands well past WRITER_Z, and
+    pinned high, the model just says that word over and over."""
+    out = []
+    for b in range(0, len(pairs), 64):
+        cols = []
+        for layer, neuron in pairs[b:b + 64]:
+            down = layers[layer].mlp.inner.down_proj
+            one = mx.zeros((1, width), dtype=getattr(down, "scales", down.weight).dtype)
+            cols.append(down(one.at[0, neuron].add(1)))
+        logits = head(model.model.norm(mx.concatenate(cols))).astype(mx.float32)
+        top = mx.argsort(-logits, axis=1)[:, :k]
+        z = (logits.max(axis=1) - logits.mean(axis=1)) / (logits.std(axis=1) + 1e-6)
+        mx.eval(top, z)
+        out += [{"says": [decoded(t) for t in row], "says_z": round(z[i].item(), 1)} for i, row in enumerate(top.tolist())]
+    return out
+
+
 def last_logits(ids):
     """The next-token logits at the last position of each row: the model
     without its head on every other position."""
@@ -289,6 +313,16 @@ def concepts_of(target, others):
     if len(others) > MAX_CONCEPTS or any(len(c) > MAX_CONCEPT_CHARS for c in [target, *others]):
         raise BadRequest(f"at most {MAX_CONCEPTS} others, each under {MAX_CONCEPT_CHARS} characters")
     return target, others
+
+
+def depth_of(v, n_layers):
+    """The layers to search, from a [from, to] fraction of the model's depth;
+    by default all but the edge layers."""
+    if v is None:
+        return SKIP_EDGE_LAYERS, n_layers - SKIP_EDGE_LAYERS
+    if not (isinstance(v, list) and len(v) == 2 and 0 <= float(v[0]) < float(v[1]) <= 1):
+        raise BadRequest("depth is [from, to], fractions of the model's depth with 0 ≤ from < to ≤ 1")
+    return int(float(v[0]) * n_layers), max(int(float(v[0]) * n_layers) + 1, round(float(v[1]) * n_layers))
 
 
 class BadRequest(Exception):
@@ -376,25 +410,32 @@ def contrast(job):
     score = (q - mean) / (std + floor)
     score = mx.where(q > most, score, -mx.inf)  # it must beat every other concept
     n_layers = score.shape[0]
-    score[:SKIP_EDGE_LAYERS] = -mx.inf
-    score[n_layers - SKIP_EDGE_LAYERS:] = -mx.inf
+    lo, hi = depth_of(req.get("depth"), n_layers)
+    score[:lo] = -mx.inf
+    score[hi:] = -mx.inf
+    # Writers say the concept's word rather than think about it, so they're
+    # left out if asked. Leaving some out needs spares to fill their places.
+    keep_writers = req.get("writers", True) is not False
     flat = score.reshape(-1)
-    order = mx.argsort(-flat)[:top]
+    order = mx.argsort(-flat)[:top if keep_writers else top * 8]
     mx.eval(order, flat)
+    pairs = [divmod(i, score.shape[1]) for i in order.tolist() if flat[i].item() != float("-inf")]
+    said = writes(pairs)
     concepts = [target, *others]
     candidates = []
-    for i in order.tolist():
-        s = flat[i].item()
-        if s == float("-inf"):
-            break
-        layer, neuron = divmod(i, score.shape[1])
+    for (layer, neuron), w in zip(pairs, said):
+        if not keep_writers and w["says_z"] >= WRITER_Z:
+            continue
         col = acts[:, layer, neuron].tolist()
         candidates.append({
-            "layer": layer, "neuron": neuron, "score": round(s, 3),
+            "layer": layer, "neuron": neuron, "score": round(flat[layer * score.shape[1] + neuron].item(), 3),
             "target": round(col[0], 4), "others_mean": round(mean[layer, neuron].item(), 4),
             "others_max": round(most[layer, neuron].item(), 4),
+            **w,
             "activations": [{"concept": c, "value": round(v, 4)} for c, v in zip(concepts, col)],
         })
+        if len(candidates) == top:
+            break
     job.out.put(("result", {
         "object": "interp.contrast", "model": NAME, "template": TEMPLATE,
         "layers": len(layers), "neurons_per_layer": width,
@@ -580,9 +621,9 @@ def scan(job):
     finally:
         hooks.record, hooks.record_only = None, None
     out = []
-    for j, (layer, neuron) in enumerate(neurons):
+    for j, ((layer, neuron), w) in enumerate(zip(neurons, writes(neurons))):
         peaks = sorted(((values[i][j].max(), i) for i in values), reverse=True)
-        out.append({"layer": layer, "neuron": neuron,
+        out.append({"layer": layer, "neuron": neuron, "says": w["says"],
                     "max": [round(float(values[i][j].max()), 3) if i in values else None for i in range(len(ids))],
                     "examples": [{"text": i, "peak": round(float(p), 3), "at": int(values[i][j].argmax()),
                                   "tokens": [decoded(t) for t in ids[i]],

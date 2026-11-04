@@ -1105,12 +1105,20 @@ Two more routes:
   run, and answers with the clean answer's probability for each.
 
 The contrast answers with the best neurons, each with its layer, index,
-score and how hard it fired for every concept. A steer entry is either
+score and how hard it fired for every concept, and what it `says`: the words
+its output weights raise most, with `says_z`, how far the top one stands out
+from the rest of the vocabulary. Most neurons sit around 5; past 8 a neuron
+writes that word, and pinned high, the model just repeats it. Add
+`"depth": [0.25, 0.65]` to search only the middle of the model, where ideas
+form rather than spellings or next words, and `"writers": false` to leave
+writers out. Scan answers carry `says` too. A steer entry is either
 `{layer, target, others, scale}` or `{layer, neuron, value}`. Directions
 steer well around a third of the way through the model, at a scale of 2 to
 3; past that the model tends to say only the concept. One neuron, even the
 one that best picks the concept out, rarely changes what the model says
-before it breaks it.
+before it breaks it. Pin it in units of its peak over many texts (scan
+finds it); several of a concept's middle-layer neurons pinned together, at a
+few times their peaks, can steer where any one of them can't.
 
 The gateway listens on port 7790 on the containers' network, and only
 containers on this Mac can reach it. To change the port, set `ai_port` in
