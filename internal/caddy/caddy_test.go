@@ -85,3 +85,15 @@ func TestBerthPathsWithoutPolicy(t *testing.T) {
 		t.Errorf("/_berth/ routed without sign-in set up:\n%s", s)
 	}
 }
+
+func TestEncodeSkipsEventStreams(t *testing.T) {
+	types := encodeHandler()["match"].(obj)["headers"].(obj)["Content-Type"].([]string)
+	for _, ty := range types {
+		if strings.HasPrefix("text/event-stream", strings.TrimSuffix(ty, "*")) {
+			t.Fatalf("%q would compress event streams", ty)
+		}
+	}
+	if len(types) == 0 || types[0] != "text/html*" {
+		t.Fatal(types)
+	}
+}

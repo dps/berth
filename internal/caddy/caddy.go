@@ -333,11 +333,28 @@ func forwardAuth(o Options) obj {
 	}
 }
 
+// encodeHandler compresses what's worth compressing, but never an event
+// stream: Safari holds back a compressed stream rather than decoding it as
+// it arrives, so a page waiting on server-sent events would see nothing.
+// Caddy's default list takes in all of text/*, so this lists types instead.
+func encodeHandler() obj {
+	return obj{
+		"handler":   "encode",
+		"encodings": obj{"zstd": obj{}, "gzip": obj{}},
+		"prefer":    []string{"zstd", "gzip"},
+		"match": obj{"headers": obj{"Content-Type": []string{
+			"text/html*", "text/plain*", "text/css*", "text/javascript*", "text/xml*", "text/csv*", "text/markdown*",
+			"application/json*", "application/javascript*", "application/xml*", "application/xhtml+xml*",
+			"application/manifest+json*", "application/ld+json*", "application/wasm*", "image/svg+xml*",
+		}}},
+	}
+}
+
 func appHandlers(r Route, o Options) []any {
 	var hs []any
 	if r.Upstream != "" {
 		return append(hs,
-			obj{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}, "prefer": []string{"zstd", "gzip"}},
+			encodeHandler(),
 			obj{"handler": "reverse_proxy", "upstreams": []any{obj{"dial": r.Upstream}}, "flush_interval": -1},
 		)
 	}
@@ -354,7 +371,7 @@ func appHandlers(r Route, o Options) []any {
 		})
 	}
 	hs = append(hs,
-		obj{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}, "prefer": []string{"zstd", "gzip"}},
+		encodeHandler(),
 		obj{
 			"handler": "reverse_proxy",
 			// The upstream is whatever berthd's SRV record for the app says:
