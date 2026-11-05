@@ -1120,6 +1120,48 @@ before it breaks it. Pin it in units of its peak over many texts (scan
 finds it); several of a concept's middle-layer neurons pinned together, at a
 few times their peaks, can steer where any one of them can't.
 
+#### Features
+
+A neuron mixes many ideas. A sparse autoencoder, trained on one layer's
+residual stream, rewrites it as a few of many *features*, directions that
+each mostly mean one thing; they are what Anthropic steered to make Golden
+Gate Claude. Give `berth ai:mlx` a Hugging Face repo of top-k autoencoders
+for the model, in [Qwen-Scope](https://huggingface.co/Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50)'s
+format, and apps get them too:
+
+```bash
+berth ai:mlx --sae Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50   # the middle layer's 65,536
+berth ai:mlx --sae-layers 12,18,24                          # more layers
+```
+
+Each layer is about 2 GB to download and 1 GB kept, converted to MLX's
+format (Qwen-Scope's files are PyTorch pickles, which can run code when
+loaded the usual way, so Berth reads them with a loader that only knows
+tensors) and deleted. Layers load into memory on first use, two at most.
+Qwen-Scope's were trained on Qwen3 8B Base; on the 4-bit chat model, with
+layer 18 swapped for its reconstruction, the next-word loss rises from 2.47
+to 2.54 nats, keeping 99% of what the layer contributes.
+
+- `/interp/contrast` with `"features": true` (and a `layer`, by default the
+  ready one nearest the middle) scores features instead of neurons, the same
+  way, each with what it `says`.
+- `/interp/scan` takes `features: [{layer, feature}]` beside `neurons`, and
+  gives each feature's `similar` ones: those pointing nearly the same way,
+  often the same idea split finer.
+- `/interp/trace` takes `features` too, and `"top_features": {"layer": 18,
+  "top": 5}` for each token's strongest.
+- A steer entry `{layer, feature, value}` clamps a feature to the value on
+  every token, as the paper does: the stream moves along the feature's
+  direction by what it takes, and what the autoencoder can't reconstruct is
+  left alone. Several entries clamp several. Values are activations; a
+  feature's peak over many texts (scan) is the unit to think in.
+
+One feature alone often acts like one neuron: no change, then gibberish. A
+concept's few strongest features clamped together at two to three times
+their peaks make the model talk about it and still make sense, as long as
+they're about the concept: leave out any that fire on much of everything
+("the" before a name, verbs of feeling), which only make it babble.
+
 The gateway listens on port 7790 on the containers' network, and only
 containers on this Mac can reach it. To change the port, set `ai_port` in
 `~/.berth/config.json` and run `berth reload`. To use Ollama on another

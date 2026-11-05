@@ -3,18 +3,23 @@
 # apps reach it as provider "mlx" with their own Berth AI token.
 #
 #   POST /v1/chat/completions   OpenAI-compatible, plus "steer": pin MLP
-#                               neurons to a value while the model writes
-#   POST /v1/interp/contrast    which MLP neuron fires for one concept and
-#                               not for related ones, at a chosen depth, and
-#                               what each one writes to the next token
-#   POST /v1/interp/trace       token by token: chosen neurons, how much of a
+#                               neurons or clamp features to a value while
+#                               the model writes
+#   POST /v1/interp/contrast    which MLP neuron (or, with "features", which
+#                               sparse-autoencoder feature) fires for one
+#                               concept and not for related ones, at a chosen
+#                               depth, and what each one writes to the next
+#                               token
+#   POST /v1/interp/trace       token by token: chosen neurons and features,
+#                               each token's strongest features, how much of a
 #                               concept's direction each token carries, each
 #                               layer's strongest neurons; with "map", every
 #                               neuron in the model as one byte; with "lens",
 #                               what each layer would predict; with
 #                               "attention", where one layer's heads looked
-#   POST /v1/interp/scan        many texts at once: where chosen neurons fire
-#                               hardest, for a page of examples per neuron
+#   POST /v1/interp/scan        many texts at once: where chosen neurons (or
+#                               features) fire hardest, for a page of
+#                               examples per neuron
 #   POST /v1/interp/patch       causal tracing: copy one layer's activations at
 #                               one token from a clean prompt into a corrupted
 #                               one, for every layer and token, and see how
@@ -51,6 +56,8 @@ MODEL = os.environ.get("BERTH_MLX_MODEL", "mlx-community/Qwen3-8B-4bit")
 HOST, _, PORT = os.environ.get("BERTH_MLX_ADDR", "127.0.0.1:7786").rpartition(":")
 IDLE = float(os.environ.get("BERTH_MLX_IDLE", "900"))
 NAME = MODEL.rsplit("/", 1)[-1]
+SAE = os.environ.get("BERTH_MLX_SAE", "")  # a Hugging Face repo of the model's sparse autoencoders
+SAE_DIR = os.environ.get("BERTH_MLX_SAE_DIR", "")  # their layers, converted (--get-sae)
 
 MAX_TOKENS = 2048
 MAX_CONCEPTS = 120
@@ -64,6 +71,7 @@ MAP_BYTES = 2_000_000  # the whole-model map for every token is pooled to fit
 TEMPLATE = "Let me tell you about {}"
 SKIP_EDGE_LAYERS = 2  # the first and last layers are about tokens, not ideas
 WRITER_Z = 8  # a neuron whose top word stands this far out writes it
+SAE_KEPT = 2  # layers of features in memory at once, about 1 GB each
 
 
 def log(*a):
@@ -97,8 +105,8 @@ class Probe(nn.Module):
 
 
 class Stream(nn.Module):
-    """Wraps one layer to record its output, the residual stream, and add
-    a direction to it."""
+    """Wraps one layer to record its output, the residual stream, add a
+    direction to it, and clamp features in it."""
 
     def __init__(self, block, layer):
         super().__init__()
@@ -110,6 +118,9 @@ class Stream(nn.Module):
         push = hooks.pushes.get(self.layer)
         if push is not None:
             out = out + push.astype(out.dtype)
+        clamp = hooks.clamps.get(self.layer)
+        if clamp is not None:
+            out = clamp(out)
         out = patched(out, "stream", self.layer)
         if hooks.streams is not None:
             hooks.streams[self.layer] = out
@@ -169,6 +180,7 @@ class Hooks:
         self.streams = None  # layer → residual stream in the last forward pass
         self.pins = {}  # layer → (keep mask, values) over the MLP neurons
         self.pushes = {}  # layer → vector added to the residual stream
+        self.clamps = {}  # layer → function setting features in the residual stream
         self.look = None  # the layer whose attention pattern to record
         self.looked = None  # and the pattern
         self.capture = None  # (site, layer) → output, for patching
@@ -202,6 +214,7 @@ def unload():
     model = tokenizer = None
     token_text.clear()
     directions.clear()
+    saes.clear()
     layers = []
     gc.collect()
     mx.clear_cache()
@@ -228,11 +241,201 @@ def writes(pairs, k=6):
             down = layers[layer].mlp.inner.down_proj
             one = mx.zeros((1, width), dtype=getattr(down, "scales", down.weight).dtype)
             cols.append(down(one.at[0, neuron].add(1)))
-        logits = head(model.model.norm(mx.concatenate(cols))).astype(mx.float32)
-        top = mx.argsort(-logits, axis=1)[:, :k]
-        z = (logits.max(axis=1) - logits.mean(axis=1)) / (logits.std(axis=1) + 1e-6)
-        mx.eval(top, z)
-        out += [{"says": [decoded(t) for t in row], "says_z": round(z[i].item(), 1)} for i, row in enumerate(top.tolist())]
+        out += says_of(mx.concatenate(cols), k)
+    return out
+
+
+def says_of(vectors, k=6):
+    """The words each residual-stream vector raises most when added to the
+    stream, and how far the top one stands out (see writes)."""
+    logits = head(model.model.norm(vectors.astype(mx.bfloat16))).astype(mx.float32)
+    top = mx.argsort(-logits, axis=1)[:, :k]
+    z = (logits.max(axis=1) - logits.mean(axis=1)) / (logits.std(axis=1) + 1e-6)
+    mx.eval(top, z)
+    return [{"says": [decoded(t) for t in row], "says_z": round(z[i].item(), 1)} for i, row in enumerate(top.tolist())]
+
+
+# ---------------------------------------------------------------- features
+#
+# A sparse autoencoder rewrites one layer's residual stream as a few of
+# many features (Qwen-Scope's for Qwen3 8B: 50 of 65,536 at each token),
+# each a direction the model uses for one thing. A neuron mixes many
+# things; a feature mostly doesn't. Clamped alone, one still goes from no
+# change to gibberish with little between, but a concept's few strongest
+# clamped together make the model talk about it. Features are trained
+# for a model, not part of it: berth ai:mlx --sae fetches a
+# repo of them, one layer at a time, and --get-sae turns each layer into
+# MLX's format here. Units are the feature's activation; most fire at a
+# few to a few dozen.
+
+
+class Features:
+    """One layer's sparse autoencoder: a top-k encoder, and each feature's
+    direction in the stream (W_dec's rows)."""
+
+    def __init__(self, path, k):
+        w = mx.load(path)
+        self.W_enc, self.b_enc, self.W_dec = w["W_enc"], w["b_enc"], w["W_dec"]
+        self.k = k
+        self.n = self.W_enc.shape[0]
+
+    def pre(self, x):
+        return (x.astype(mx.bfloat16) @ self.W_enc.T).astype(mx.float32) + self.b_enc
+
+    def encode(self, x):
+        """Every feature's activation, zero for all but each token's k
+        strongest: what the autoencoder was trained to read."""
+        pre = self.pre(x)
+        kth = mx.partition(pre, kth=self.n - self.k, axis=-1)[..., self.n - self.k:self.n - self.k + 1]
+        return mx.where((pre >= kth) & (pre > 0), pre, 0)
+
+    def clamp(self, idx, values):
+        """Sets features to values at every token, as Scaling
+        Monosemanticity steers: the stream moves along each feature's
+        direction by what it takes, and what the autoencoder can't
+        reconstruct stays as it was."""
+        idx, values = mx.array(idx), mx.array(values, dtype=mx.float32)
+        dirs = self.W_dec[idx].astype(mx.float32)  # m × d
+
+        def f(out):
+            now = self.encode(out)[..., idx]
+            return out + ((values - now) @ dirs).astype(out.dtype)
+        return f
+
+
+saes = {}  # layer → Features, most recently used last
+sae_config = None
+
+
+def sae_layers(d=SAE_DIR):
+    """The layers whose features are ready here."""
+    if not d or not os.path.isdir(d):
+        return []
+    return sorted(int(f[5:-12]) for f in os.listdir(d) if f.startswith("layer") and f.endswith(".safetensors"))
+
+
+def features_at(layer):
+    global sae_config
+    if layer in saes:
+        saes[layer] = saes.pop(layer)
+        return saes[layer]
+    ready = sae_layers()
+    if not SAE:
+        raise BadRequest("this worker has no features: berth ai:mlx --sae <hugging-face-repo> adds a sparse autoencoder's")
+    if layer not in ready:
+        raise BadRequest(f"features are ready at layers {', '.join(map(str, ready)) or 'none'}; berth ai:mlx --sae-layers adds more")
+    if sae_config is None:
+        with open(os.path.join(SAE_DIR, "config.json")) as f:
+            sae_config = json.load(f)
+    while len(saes) >= SAE_KEPT:
+        saes.pop(next(iter(saes)))
+        gc.collect()
+    saes[layer] = Features(os.path.join(SAE_DIR, f"layer{layer}.safetensors"), int(sae_config["k"]))
+    if saes[layer].W_enc.shape[1] != model.model.norm.weight.shape[0]:
+        saes.pop(layer)
+        raise BadRequest(f"{SAE}'s features are for a model {sae_config.get('d_model')} wide; {NAME} isn't")
+    return saes[layer]
+
+
+def default_feature_layer():
+    """The ready layer nearest the middle of the model, where features are
+    most about ideas."""
+    ready = sae_layers()
+    if not ready:
+        features_at(-1)  # says why
+    return min(ready, key=lambda l: abs(l - len(layers) // 2))
+
+
+def similar(layer, feature, k=5):
+    """The features whose directions are nearest this one's: often the
+    same idea split finer, or its neighbours."""
+    d = features_at(layer).W_dec
+    v = d[feature]
+    cos = (d @ v).astype(mx.float32) / (mx.linalg.norm(d.astype(mx.float32), axis=-1) * mx.linalg.norm(v.astype(mx.float32)) + 1e-6)
+    near = mx.argsort(-cos)[:k + 1].tolist()
+    return [{"feature": f, "cos": round(cos[f].item(), 3)} for f in near if f != feature][:k]
+
+
+def features_of(v, most=16):
+    """{layer, feature} entries, checked."""
+    out = []
+    for n in v:
+        layer, feature = int(n.get("layer", -1)), int(n.get("feature", -1))
+        if not 0 <= feature < features_at(layer).n:
+            raise BadRequest(f"no feature {feature} at layer {layer}")
+        out.append((layer, feature))
+    return out
+
+
+def get_sae(repo, dest, want):
+    """--get-sae: downloads a repo's layers and converts each to MLX bf16
+    safetensors, deleting the download. Qwen-Scope's are PyTorch pickles,
+    which can run code when loaded the usual way; this reads them with an
+    unpickler that only knows how a tensor is saved."""
+    from huggingface_hub import hf_hub_download
+    os.makedirs(dest, exist_ok=True)
+    cfg = json.load(open(hf_hub_download(repo, "config.json", local_dir=dest)))
+    if cfg.get("model_type") != "topk_sae":
+        sys.exit(f"{repo} isn't a top-k sparse autoencoder this worker reads (model_type {cfg.get('model_type')!r})")
+    want = want or [cfg["num_layers"] // 2]
+    for layer in want:
+        out = os.path.join(dest, f"layer{layer}.safetensors")
+        if os.path.exists(out):
+            continue
+        print(f"-----> Getting layer {layer}'s features (about 2 GB, once)", flush=True)
+        pt = hf_hub_download(repo, f"layer{layer}.sae.pt", local_dir=dest)
+        try:
+            t = pt_tensors(pt, ("W_enc", "b_enc", "W_dec"))
+            w = {"W_enc": mx.array(t["W_enc"]).astype(mx.bfloat16), "b_enc": mx.array(t["b_enc"]),
+                 "W_dec": mx.array(np.ascontiguousarray(t["W_dec"].T)).astype(mx.bfloat16)}
+            del t
+            part = os.path.join(dest, f".layer{layer}.partial.safetensors")
+            mx.save_safetensors(part, w)
+            os.replace(part, out)
+        finally:
+            os.remove(pt)
+    print("-----> Features ready at layers", ", ".join(map(str, sae_layers(dest))), flush=True)
+
+
+def pt_tensors(path, names):
+    """Float tensors from a PyTorch zip of a dict of tensors, without torch
+    and without running anything from the pickle."""
+    import pickle
+    import zipfile
+
+    class Rebuilt(tuple):
+        pass
+
+    def rebuild(storage, offset, size, stride, *rest):
+        return Rebuilt((storage, offset, tuple(size), tuple(stride)))
+
+    class Safe(pickle.Unpickler):
+        def find_class(self, module, name):
+            if (module, name) == ("torch._utils", "_rebuild_tensor_v2"):
+                return rebuild
+            if (module, name) == ("torch", "FloatStorage"):
+                return name
+            if (module, name) == ("collections", "OrderedDict"):
+                return dict
+            raise pickle.UnpicklingError(f"won't load {module}.{name}")
+
+        def persistent_load(self, pid):
+            if pid[0] != "storage" or pid[1] != "FloatStorage":
+                raise pickle.UnpicklingError(f"won't load storage {pid[:2]}")
+            return pid[2]
+
+    z = zipfile.ZipFile(path)
+    pkl = next(n for n in z.namelist() if n.endswith("/data.pkl"))
+    d = Safe(z.open(pkl)).load()
+    out = {}
+    for name in names:
+        key, offset, shape, stride = d[name]
+        member = pkl[:-len("data.pkl")] + "data/" + key
+        if z.getinfo(member).compress_type != zipfile.ZIP_STORED:
+            raise ValueError(f"{name} is compressed")
+        with z.open(member) as f:
+            a = np.frombuffer(f.read(), dtype=np.float32)
+        out[name] = np.lib.stride_tricks.as_strided(a[offset:], shape=shape, strides=[s * 4 for s in stride])
     return out
 
 
@@ -251,21 +454,29 @@ def decoded(i):
     return token_text[i]
 
 
+def unpin():
+    hooks.pins, hooks.pushes, hooks.clamps = {}, {}, {}
+
+
 def set_pins(steer):
     """Turns a request's steer list into each layer's (keep, add) vectors:
     {layer, neuron, value} pins one neuron; {layer, target, others, scale}
-    adds the concept's direction (its activations minus the others' mean)."""
-    hooks.pins, hooks.pushes = {}, {}
+    adds the concept's direction (its activations minus the others' mean);
+    {layer, feature, value} clamps a feature."""
+    unpin()
     if not isinstance(steer, list) or len(steer) > 16:
         if steer:
             raise BadRequest("steer is a list of at most 16 entries")
         return
-    keep, add, push = {}, {}, {}
+    keep, add, push, clamp = {}, {}, {}, {}
     for s in steer:
         layer = int(s.get("layer", -1))
         if not 0 <= layer < len(layers):
             raise BadRequest(f"no layer {layer}: there are {len(layers)}")
-        if "neuron" in s:
+        if "feature" in s:
+            (_, feature), = features_of([s])
+            clamp.setdefault(layer, {})[feature] = float(s["value"])
+        elif "neuron" in s:
             neuron, value = int(s["neuron"]), float(s["value"])
             if not 0 <= neuron < width:
                 raise BadRequest(f"no neuron {neuron}: layers have {width}")
@@ -276,9 +487,10 @@ def set_pins(steer):
             d = float(s.get("scale", 1.0)) * direction(s["target"], s.get("others"))[layer]
             push[layer] = push.get(layer, 0) + d
         else:
-            raise BadRequest("each steer entry needs neuron and value, or target and others")
+            raise BadRequest("each steer entry needs neuron and value, feature and value, or target and others")
     hooks.pins = {layer: (keep[layer], add[layer]) for layer in keep}
     hooks.pushes = push
+    hooks.clamps = {layer: features_at(layer).clamp(list(c), list(c.values())) for layer, c in clamp.items()}
 
 
 directions = {}  # (target, others) → per-layer direction, most recent last
@@ -362,12 +574,13 @@ def chat(job):
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         job.out.put(("done", {"finish_reason": (last.finish_reason if last else None) or "stop", "usage": usage}))
     finally:
-        hooks.pins, hooks.pushes = {}, {}
+        unpin()
 
 
-def span_activations(text):
+def span_activations(text, feat=None):
     """Over the concept's tokens: each layer's MLP neurons at their
-    strongest, and its residual stream on average."""
+    strongest, and its residual stream on average; with feat, a (layer,
+    Features), that layer's features at their strongest too."""
     prefix = TEMPLATE.split("{}")[0].rstrip()
     start = len(tokenizer.encode(prefix))
     ids = tokenizer.encode(TEMPLATE.format(text))
@@ -378,8 +591,9 @@ def span_activations(text):
         model(mx.array(ids)[None])
         acts = mx.stack([hooks.record[i][0, start:].max(axis=0) for i in range(len(layers))]).astype(mx.float32)
         stream = mx.stack([hooks.streams[i][0, start:].mean(axis=0) for i in range(len(layers))]).astype(mx.float32)
-        mx.eval(acts, stream)
-        return acts, stream, len(ids)
+        peaks = feat[1].encode(hooks.streams[feat[0]][0, start:]).max(axis=0) if feat else None
+        mx.eval(acts, stream, peaks)
+        return acts, stream, len(ids), peaks
     finally:
         hooks.record, hooks.streams = None, None
 
@@ -388,19 +602,27 @@ def contrast(job):
     req = job.body
     target, others = concepts_of(req.get("target"), req.get("others"))
     top = max(1, min(int(req.get("top") or 10), 50))
+    feat = None
+    if req.get("features"):
+        layer = default_feature_layer() if req.get("layer") is None else int(req["layer"])
+        feat = (layer, features_at(layer))
     t0 = time.time()
     tokens = 0
-    rows, streams = [], []
+    rows, streams, peaks = [], [], []
     for c in [target, *others]:
         if job.cancelled:
             return
-        a, st, n = span_activations(c)
+        a, st, n, p = span_activations(c, feat)
         rows.append(a)
         streams.append(st)
+        peaks.append(p)
         tokens += n
         job.out.put(("progress", len(rows)))
-    acts = mx.stack(rows)  # concepts × layers × neurons
     remember_direction((target, tuple(others)), mx.stack(streams))  # so steering by it is quick
+    usage = {"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens}
+    if feat:
+        return job.out.put(("result", feature_contrast(feat, [target, *others], mx.stack(peaks), top, usage, t0)))
+    acts = mx.stack(rows)  # concepts × layers × neurons
     q, o = acts[0], acts[1:]
     mean, std, most = o.mean(axis=0), o.std(axis=0), o.max(axis=0)
     # How far above the others the target is, in the others' spread. The
@@ -440,9 +662,37 @@ def contrast(job):
         "object": "interp.contrast", "model": NAME, "template": TEMPLATE,
         "layers": len(layers), "neurons_per_layer": width,
         "candidates": candidates,
-        "usage": {"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens},
+        "usage": usage,
         "seconds": round(time.time() - t0, 2),
     }))
+
+
+def feature_contrast(feat, concepts, acts, top, usage, t0):
+    """contrast over one layer's features rather than every neuron. Most
+    features are silent for most concepts, so the floor is a share of a
+    typical firing rather than of the average, which is nearly zero."""
+    layer, sae = feat
+    q, o = acts[0], acts[1:]  # acts: concepts × features
+    mean, std, most = o.mean(axis=0), o.std(axis=0), o.max(axis=0)
+    fired = acts > 0
+    floor = 0.25 * (acts.sum() / mx.maximum(fired.sum(), 1)) + 1e-3
+    score = mx.where(q > most, (q - mean) / (std + floor), -mx.inf)
+    order = mx.argsort(-score)[:top]
+    mx.eval(order, score)
+    ids = [i for i in order.tolist() if score[i].item() != float("-inf")]
+    said = says_of(sae.W_dec[mx.array(ids)]) if ids else []
+    candidates = []
+    for f, w in zip(ids, said):
+        col = acts[:, f].tolist()
+        candidates.append({
+            "layer": layer, "feature": f, "score": round(score[f].item(), 3),
+            "target": round(col[0], 4), "others_mean": round(mean[f].item(), 4), "others_max": round(most[f].item(), 4),
+            **w,
+            "activations": [{"concept": c, "value": round(v, 4)} for c, v in zip(concepts, col)],
+        })
+    return {"object": "interp.contrast", "model": NAME, "template": TEMPLATE, "layers": len(layers),
+            "features": {"repo": SAE, "layer": layer, "per_layer": sae.n, "k": sae.k, "ready": sae_layers()},
+            "candidates": candidates, "usage": usage, "seconds": round(time.time() - t0, 2)}
 
 
 def trace(job):
@@ -467,6 +717,17 @@ def trace(job):
     for n in neurons:
         if not (0 <= int(n.get("layer", -1)) < len(layers) and 0 <= int(n.get("neuron", -1)) < width):
             raise BadRequest(f"no neuron {n.get('layer')}/{n.get('neuron')}")
+    feats = req.get("features") or []
+    if not isinstance(feats, list) or len(feats) > 16:
+        raise BadRequest("features is a list of at most 16 {layer, feature}")
+    feats = features_of(feats)
+    strongest = req.get("top_features")
+    if strongest is not None:
+        if not isinstance(strongest, dict):
+            raise BadRequest("top_features is {layer, top}")
+        f_layer = default_feature_layer() if strongest.get("layer") is None else int(strongest["layer"])
+        f_top = max(1, min(int(strongest.get("top") or 5), 16))
+        features_at(f_layer)
     # Directions first: working one out runs the model, which would
     # overwrite what this pass records.
     vecs = []
@@ -486,6 +747,18 @@ def trace(job):
         out["neurons"] = [{"layer": int(n["layer"]), "neuron": int(n["neuron"]),
                            "values": [round(v, 3) for v in hooks.record[int(n["layer"])][0, :, int(n["neuron"])].astype(mx.float32).tolist()]}
                           for n in neurons]
+        if feats:
+            out["features"] = []
+            for layer, f in feats:
+                v = features_at(layer).encode(hooks.streams[layer][0, 1:])[:, f]  # not the first token (see scan)
+                out["features"].append({"layer": layer, "feature": f, "values": [0.0] + [round(x, 3) for x in v.tolist()]})
+        if strongest is not None:
+            a = features_at(f_layer).encode(hooks.streams[f_layer][0]).at[0].multiply(0)
+            idx = mx.argsort(-a, axis=-1)[:, :f_top]
+            val = mx.take_along_axis(a, idx, axis=-1)
+            # top_features[token] = [[feature, value], ...], strongest first; silent ones left out
+            out["top_features"] = {"layer": f_layer, "tokens": [[[i, round(v, 2)] for i, v in zip(ri, rv) if v > 0]
+                                                                for ri, rv in zip(idx.tolist(), val.tolist())]}
         out["directions"] = []
         for d, layer, v in vecs:
             # Cosine between each token's residual stream and the direction.
@@ -513,7 +786,7 @@ def trace(job):
         job.out.put(("result", out))
     finally:
         hooks.record, hooks.streams = None, None
-        hooks.pins, hooks.pushes = {}, {}
+        unpin()
         hooks.look, hooks.looked = None, None
 
 
@@ -597,14 +870,19 @@ def scan(job):
     texts = req.get("texts")
     if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_SCAN_TEXTS:
         raise BadRequest(f"texts is a list of 1 to {MAX_SCAN_TEXTS} strings")
-    neurons = neurons_of(req.get("neurons"))
+    neurons = neurons_of(req.get("neurons")) if req.get("neurons") or not req.get("features") else []
+    feats = req.get("features") or []
+    if not isinstance(feats, list) or len(neurons) + len(feats) > 16:
+        raise BadRequest("at most 16 neurons and features")
+    feats = features_of(feats)
     top = max(1, min(int(req.get("top") or 12), 50))
     ids = [tokenizer.encode(str(t)[:2000])[:MAX_SCAN_TOKENS] for t in texts]
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     order = sorted((i for i in range(len(ids)) if ids[i]), key=lambda i: len(ids[i]))
-    values = {}  # text → neurons × tokens
+    values = {}  # text → units (neurons, then features) × tokens
     t0 = time.time()
     hooks.record, hooks.record_only = {}, {layer for layer, _ in neurons}
+    hooks.streams = {} if feats else None
     try:
         for b in range(0, len(order), SCAN_BATCH):
             if job.cancelled:
@@ -613,13 +891,21 @@ def scan(job):
             n = max(len(ids[i]) for i in rows)
             x = mx.array([ids[i] + [pad] * (n - len(ids[i])) for i in rows])
             hooks.record.clear()
-            model.model(x)  # lazy: only what the neurons need is computed
-            v = mx.stack([hooks.record[layer][:, :, neuron] for layer, neuron in neurons], axis=1).astype(mx.float32)
+            model.model(x)  # lazy: only what the units need is computed
+            cols = [hooks.record[layer][:, :, neuron].astype(mx.float32) for layer, neuron in neurons]
+            enc = {}
+            for layer, f in feats:
+                if layer not in enc:
+                    # The first token is where attention rests, its stream huge;
+                    # what features read there isn't about the text.
+                    enc[layer] = features_at(layer).encode(hooks.streams[layer]).at[:, 0].multiply(0)
+                cols.append(enc[layer][:, :, f])
+            v = mx.stack(cols, axis=1)
             for r, i in enumerate(rows):
                 values[i] = np.array(v[r, :, :len(ids[i])])
             job.out.put(("progress", len(values)))
     finally:
-        hooks.record, hooks.record_only = None, None
+        hooks.record, hooks.record_only, hooks.streams = None, None, None
     out = []
     for j, ((layer, neuron), w) in enumerate(zip(neurons, writes(neurons))):
         peaks = sorted(((values[i][j].max(), i) for i in values), reverse=True)
@@ -628,8 +914,17 @@ def scan(job):
                     "examples": [{"text": i, "peak": round(float(p), 3), "at": int(values[i][j].argmax()),
                                   "tokens": [decoded(t) for t in ids[i]],
                                   "values": [round(float(x), 3) for x in values[i][j]]} for p, i in peaks[:top]]})
+    found = []
+    said = says_of(mx.stack([features_at(l).W_dec[f] for l, f in feats])) if feats else []
+    for j, ((layer, f), w) in enumerate(zip(feats, said), start=len(neurons)):
+        peaks = sorted(((values[i][j].max(), i) for i in values), reverse=True)
+        found.append({"layer": layer, "feature": f, "says": w["says"], "says_z": w["says_z"], "similar": similar(layer, f),
+                      "max": [round(float(values[i][j].max()), 3) if i in values else None for i in range(len(ids))],
+                      "examples": [{"text": i, "peak": round(float(p), 3), "at": int(values[i][j].argmax()),
+                                    "tokens": [decoded(t) for t in ids[i]],
+                                    "values": [round(float(x), 3) for x in values[i][j]]} for p, i in peaks[:top]]})
     tokens = sum(len(i) for i in ids)
-    job.out.put(("result", {"object": "interp.scan", "model": NAME, "neurons": out,
+    job.out.put(("result", {"object": "interp.scan", "model": NAME, "neurons": out, "features": found,
                             "usage": {"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens},
                             "seconds": round(time.time() - t0, 2)}))
 
@@ -761,7 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/healthz":
-            return self.send_json(200, {"model": MODEL, "loaded": model is not None, "queued": jobs.qsize()})
+            return self.send_json(200, {"model": MODEL, "loaded": model is not None, "queued": jobs.qsize(),
+                                        "features": {"repo": SAE, "layers": sae_layers()} if SAE else None})
         if self.path == "/v1/models":
             return self.send_json(200, {"object": "list", "data": [{"id": NAME, "object": "model", "owned_by": "mlx"}]})
         self.error(404, "not found")
@@ -860,6 +1156,9 @@ def watch_stdin():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--get-sae"]:  # --get-sae repo dir [layer ...]
+        get_sae(sys.argv[2], sys.argv[3], [int(x) for x in sys.argv[4:]])
+        sys.exit(0)
     threading.Thread(target=watch_stdin, daemon=True).start()
     threading.Thread(target=model_thread, daemon=True).start()
     server = ThreadingHTTPServer((HOST, int(PORT)), Handler)

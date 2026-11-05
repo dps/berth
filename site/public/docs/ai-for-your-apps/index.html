@@ -233,6 +233,43 @@ one that best picks the concept out, rarely changes what the model says
 before it breaks it. Pin it in units of its peak over many texts (scan
 finds it); several of a concept's middle-layer neurons pinned together, at a
 few times their peaks, can steer where any one of them can't.</p>
+<h3 id="features">Features</h3>
+<p>A neuron mixes many ideas. A sparse autoencoder, trained on one layer's
+residual stream, rewrites it as a few of many <em>features</em>, directions that
+each mostly mean one thing; they are what Anthropic steered to make Golden
+Gate Claude. Give <code>berth ai:mlx</code> a Hugging Face repo of top-k autoencoders
+for the model, in <a href="https://huggingface.co/Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50">Qwen-Scope</a>'s
+format, and apps get them too:</p>
+<pre><code>berth ai:mlx --sae Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50   # the middle layer's 65,536
+berth ai:mlx --sae-layers 12,18,24                          # more layers
+</code></pre>
+<p>Each layer is about 2 GB to download and 1 GB kept, converted to MLX's
+format (Qwen-Scope's files are PyTorch pickles, which can run code when
+loaded the usual way, so Berth reads them with a loader that only knows
+tensors) and deleted. Layers load into memory on first use, two at most.
+Qwen-Scope's were trained on Qwen3 8B Base; on the 4-bit chat model, with
+layer 18 swapped for its reconstruction, the next-word loss rises from 2.47
+to 2.54 nats, keeping 99% of what the layer contributes.</p>
+<ul>
+<li><code>/interp/contrast</code> with <code>&quot;features&quot;: true</code> (and a <code>layer</code>, by default the
+ready one nearest the middle) scores features instead of neurons, the same
+way, each with what it <code>says</code>.</li>
+<li><code>/interp/scan</code> takes <code>features: [{layer, feature}]</code> beside <code>neurons</code>, and
+gives each feature's <code>similar</code> ones: those pointing nearly the same way,
+often the same idea split finer.</li>
+<li><code>/interp/trace</code> takes <code>features</code> too, and <code>&quot;top_features&quot;: {&quot;layer&quot;: 18,
+&quot;top&quot;: 5}</code> for each token's strongest.</li>
+<li>A steer entry <code>{layer, feature, value}</code> clamps a feature to the value on
+every token, as the paper does: the stream moves along the feature's
+direction by what it takes, and what the autoencoder can't reconstruct is
+left alone. Several entries clamp several. Values are activations; a
+feature's peak over many texts (scan) is the unit to think in.</li>
+</ul>
+<p>One feature alone often acts like one neuron: no change, then gibberish. A
+concept's few strongest features clamped together at two to three times
+their peaks make the model talk about it and still make sense, as long as
+they're about the concept: leave out any that fire on much of everything
+(&quot;the&quot; before a name, verbs of feeling), which only make it babble.</p>
 <p>The gateway listens on port 7790 on the containers' network, and only
 containers on this Mac can reach it. To change the port, set <code>ai_port</code> in
 <code>~/.berth/config.json</code> and run <code>berth reload</code>. To use Ollama on another

@@ -34,6 +34,11 @@ type AIMLX struct {
 	IdleSeconds int `json:"idle_seconds,omitempty"`
 	// Worker runs this script in place of the built-in one, for working on it.
 	Worker string `json:"worker,omitempty"`
+	// SAE is a Hugging Face repo of sparse autoencoders trained on the
+	// model's residual stream, whose features apps can find and clamp;
+	// SAELayers are the layers fetched (by default the middle one).
+	SAE       string `json:"sae,omitempty"`
+	SAELayers []int  `json:"sae_layers,omitempty"`
 }
 
 type AIProvider struct {

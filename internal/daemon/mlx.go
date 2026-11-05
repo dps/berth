@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -105,15 +106,24 @@ func (d *Daemon) mlxCommand(ctx context.Context) (*exec.Cmd, error) {
 // its dependencies all have wheels for.
 const mlxPythonVersion = "3.12"
 
+// saeDir is where a repo's autoencoder layers are kept, converted.
+func (d *Daemon) saeDir(repo string) string {
+	return filepath.Join(d.mlxDir(), "sae", strings.ReplaceAll(repo, "/", "--"))
+}
+
 func (d *Daemon) mlxEnv(m *state.AIMLX) []string {
-	return []string{
-		"BERTH_MLX_MODEL=" + m.Model,
+	env := []string{}
+	if m.SAE != "" {
+		env = append(env, "BERTH_MLX_SAE="+m.SAE, "BERTH_MLX_SAE_DIR="+d.saeDir(m.SAE))
+	}
+	return append(env,
+		"BERTH_MLX_MODEL="+m.Model,
 		"HF_HOME=" + filepath.Join(d.mlxDir(), "hf"),
 		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(d.mlxDir(), "python"),
 		"UV_CACHE_DIR=" + filepath.Join(d.mlxDir(), "uv-cache"),
 		"HF_HUB_DISABLE_TELEMETRY=1",
 		"PYTHONUNBUFFERED=1",
-	}
+	)
 }
 
 // superviseChild starts a child process when it's wanted, and again if it
@@ -188,8 +198,10 @@ func superviseChild(ctx context.Context, name string, want chan bool, setProc fu
 }
 
 type AIMLXParams struct {
-	Model string `json:"model,omitempty"`
-	Off   bool   `json:"off,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Off       bool   `json:"off,omitempty"`
+	SAE       string `json:"sae,omitempty"`        // a repo of sparse autoencoders; "none" drops them
+	SAELayers []int  `json:"sae_layers,omitempty"` // which of its layers to fetch
 }
 
 // hAIMLX sets the worker up (Python environment, model download) and turns
@@ -216,8 +228,27 @@ func (d *Daemon) hAIMLX(ctx context.Context, params json.RawMessage, out io.Writ
 	if ac.MLX != nil {
 		m = ac.MLX
 	}
-	if p.Model != "" {
+	if p.Model != "" && p.Model != m.Model {
 		m.Model = p.Model
+		m.SAE, m.SAELayers = "", nil // trained for the old model
+	}
+	switch {
+	case p.SAE == "none":
+		if m.SAE != "" {
+			fmt.Fprintf(out, "-----> Features off (they stay in %s; delete it to free the space)\n", d.saeDir(m.SAE))
+		}
+		m.SAE, m.SAELayers = "", nil
+	case p.SAE != "":
+		if p.SAE != m.SAE {
+			m.SAELayers = nil
+		}
+		m.SAE = p.SAE
+	}
+	if len(p.SAELayers) > 0 {
+		if m.SAE == "" {
+			return nil, fmt.Errorf("--sae-layers needs --sae, a repo of sparse autoencoders for %s", m.Model)
+		}
+		m.SAELayers = p.SAELayers
 	}
 	if err := d.mlxSetup(ctx, m, out); err != nil {
 		return nil, err
@@ -290,6 +321,25 @@ func (d *Daemon) mlxSetup(ctx context.Context, m *state.AIMLX, out io.Writer) er
 	get := fmt.Sprintf("from huggingface_hub import snapshot_download; print(snapshot_download(%q, allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja', '*.model', '*.tiktoken']))", m.Model)
 	if err := run(vpy, "-c", get); err != nil {
 		return fmt.Errorf("downloading %s: %w", m.Model, err)
+	}
+	if m.SAE == "" {
+		return nil
+	}
+	// The worker script fetches and converts the autoencoder's layers;
+	// each is about 2 GB to download and 1 GB kept.
+	script := filepath.Join(d.mlxDir(), "worker.py")
+	if m.Worker != "" {
+		script = m.Worker
+	} else if err := state.WriteFile(script, ai.MLXWorker, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "-----> Getting %s's features\n", m.SAE)
+	args := []string{script, "--get-sae", m.SAE, d.saeDir(m.SAE)}
+	for _, l := range m.SAELayers {
+		args = append(args, strconv.Itoa(l))
+	}
+	if err := run(vpy, args...); err != nil {
+		return fmt.Errorf("getting %s: %w", m.SAE, err)
 	}
 	return nil
 }

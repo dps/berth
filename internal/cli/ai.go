@@ -325,19 +325,27 @@ func cmdAIKey() *cobra.Command {
 
 func cmdAIMLX() *cobra.Command {
 	var off, yes bool
+	var sae string
+	var saeLayers []int
 	c := &cobra.Command{
 		Use:   "ai:mlx [hugging-face-model]",
 		Short: "Run a model on the GPU with its neurons open to apps: provider mlx, /v1/interp/contrast and steering",
 		Long: "Sets up MLX (a Python environment in ~/.berth/ai/mlx), downloads the model once, and runs it\n" +
 			"for apps as mlx/<name>. Unlike Ollama's models, apps can find the neurons that fire for a\n" +
 			"concept (POST /v1/interp/contrast) and pin neurons while the model writes (\"steer\" in a\n" +
-			"chat request). The model loads on first use and unloads after 15 idle minutes.",
+			"chat request). The model loads on first use and unloads after 15 idle minutes.\n\n" +
+			"With --sae, a repo of sparse autoencoders trained on the model (top-k, in Qwen-Scope's\n" +
+			"format), apps can find and clamp features too: directions that each mostly mean one\n" +
+			"thing; a concept's few strongest, clamped together, steer the model. Each layer is about\n" +
+			"2 GB to fetch and 1 GB kept.",
 		Example: "  berth ai:mlx                                   # Qwen3 8B, 4-bit (about 5 GB)\n" +
 			"  berth ai:mlx mlx-community/Qwen3-4B-4bit       # smaller, for Macs with less memory\n" +
+			"  berth ai:mlx --sae Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50   # its features, middle layer\n" +
+			"  berth ai:mlx --sae-layers 12,18,24             # more layers of them\n" +
 			"  berth ai:mlx --off",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := daemon.AIMLXParams{Off: off}
+			p := daemon.AIMLXParams{Off: off, SAE: sae, SAELayers: saeLayers}
 			if len(args) == 1 {
 				p.Model = args[0]
 			}
@@ -357,6 +365,8 @@ func cmdAIMLX() *cobra.Command {
 	}
 	c.Flags().BoolVar(&off, "off", false, "stop the worker")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "install uv without asking")
+	c.Flags().StringVar(&sae, "sae", "", "a Hugging Face repo of the model's sparse autoencoders (none to drop them)")
+	c.Flags().IntSliceVar(&saeLayers, "sae-layers", nil, "which of its layers to fetch (default the middle one)")
 	return c
 }
 
